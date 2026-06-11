@@ -861,7 +861,7 @@ ui <- tagList(
                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:12px;",
                              "Settings"),
                           sliderInput("precision","Integration interval (s)",value=0.01,min=0.001,max=0.1),
-                          p("0.01 s recommended"),
+                          p("0.01-0.05 s recommended. Use lower or higher values with caution."),
                           div(style="margin:10px 0 6px;",
                               tags$label(class="unit-lbl","Display units")),
                           radioButtons("units",label=NULL,
