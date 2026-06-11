@@ -302,360 +302,463 @@ css <- "
 @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg:     #1f1f1f;
-  --panel:  #2a2a2a;
-  --border: #3a3a3a;
-  --accent: #5ea0ff;
-  --accent2:#34d399;
-  --warn:   #f87171;
-  --yellow: #fbbf24;
-  --text:   #ffffff;
-  --dim:    #d9d9d9;
-  --sans:   'Lexend', sans-serif;
+  --c1:    #ff4e50;
+  --c2:    #fc913a;
+  --c3:    #f9d62e;
+  --c4:    #eae374;
+  --c5:    #e2f4c7;
+  --dark:  #1a1008;
+  --panel: rgba(26,16,8,0.82);
+  --border:#fc913a44;
+  --text:  #fff8f0;
+  --dim:   #f9d62ecc;
+  --sans:  'Lexend', sans-serif;
 }
 
-*,*::before,*::after {
-  font-family: 'Lexend', sans-serif !important;
+*,*::before,*::after { font-family:'Lexend',sans-serif!important; }
+
+html {
+  min-height:100%;
+  background:
+    linear-gradient(180deg,
+      #ff4e50 0%,
+      #ff4e50 16%,
+      #fc913a 16%,
+      #fc913a 32%,
+      #f9d62e 32%,
+      #f9d62e 48%,
+      #eae374 48%,
+      #eae374 64%,
+      #e2f4c7 64%,
+      #e2f4c7 80%,
+      #b8dba0 80%,
+      #b8dba0 100%) fixed!important;
 }
 
-html,body{
-  background:var(--bg)!important;
-  color:var(--text)!important;
-  font-family:var(--sans)!important;
-  font-weight:400!important;
-}
-
-.navbar{
-  background:var(--panel)!important;
-  border-bottom:1px solid var(--border)!important;
-  padding:0 20px!important;
-  box-shadow:0 1px 3px rgba(0,0,0,.35)!important;
-}
-
-.navbar-brand{
-  font-size:1rem!important;
-  font-weight:700!important;
-  color:var(--text)!important;
-  letter-spacing:.5px!important;
-  font-family:var(--sans)!important;
-}
-
-.nav-link{
-  font-size:0.78rem!important;
-  color:var(--dim)!important;
-  padding:14px 16px!important;
-  border-bottom:2px solid transparent!important;
-  text-transform:uppercase!important;
-  letter-spacing:.8px!important;
-  font-weight:600!important;
-  font-family:var(--sans)!important;
-}
-
-.nav-link:hover{
-  color:var(--text)!important;
-}
-
-.nav-link.active{
-  color:var(--accent)!important;
-  border-bottom-color:var(--accent)!important;
+body {
   background:transparent!important;
-}
-
-.tab-content{
-  padding:20px 24px;
-}
-
-label,.form-label{
-  font-size:0.72rem!important;
   color:var(--text)!important;
+  min-height:100vh;
+}
+
+/* Faint inner-shadow on each band to give 3-D depth */
+body::before {
+  content:'';
+  position:fixed;
+  inset:0;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0px,
+      transparent calc(16vh - 4px),
+      rgba(0,0,0,0.22) calc(16vh - 4px),
+      rgba(255,255,255,0.06) calc(16vh),
+      transparent calc(16vh + 1px)
+    );
+  pointer-events:none;
+  z-index:0;
+}
+
+/* overlay so content stays readable */
+body::after {
+  content:'';
+  position:fixed;
+  inset:0;
+  background:rgba(10,6,2,0.55);
+  pointer-events:none;
+  z-index:1;
+}
+
+.tab-content,
+.navbar,
+.shiny-plot-output,
+.card,
+.well,
+.leaflet-container,
+pre,
+.shiny-verbatim-output,
+.stab-box,
+.run-table,
+.irs--shiny,
+.form-control,
+input,select,
+.nav-pills,
+.sidebarPanel,
+.mainPanel,
+.container-fluid,
+#shiny-tab-Setup,
+#shiny-tab-Simulation,
+#shiny-tab-Results,
+#shiny-tab-3D.Track,
+#shiny-tab-Monte.Carlo {
+  position:relative;
+  z-index:2;
+}
+
+/* ── NAVBAR ── */
+.navbar {
+  background:linear-gradient(180deg,rgba(26,16,8,0.97) 0%,rgba(20,10,4,0.99) 100%)!important;
+  border-bottom:2px solid var(--c2)!important;
+  box-shadow:0 4px 24px rgba(255,78,80,0.25),0 2px 8px rgba(0,0,0,0.7)!important;
+  padding:4px 32px!important;
+  z-index:100!important;
+  position:relative!important;
+  min-height:58px!important;
+}
+.navbar-brand {
+  font-size:1.5rem!important;
+  font-weight:800!important;
+  letter-spacing:3px!important;
+  background:linear-gradient(90deg,var(--c1),var(--c2),var(--c3))!important;
+  -webkit-background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
+  text-shadow:none!important;
+  padding:10px 0!important;
+}
+.nav-link {
+  font-size:0.73rem!important;
+  color:#f9d62eaa!important;
+  padding:16px 20px!important;
   text-transform:uppercase!important;
-  letter-spacing:.05em!important;
+  letter-spacing:1.4px!important;
   font-weight:600!important;
-  font-family:var(--sans)!important;
+  border-bottom:3px solid transparent!important;
+  transition:all .2s!important;
+}
+.nav-link:hover  { color:var(--c3)!important; }
+.nav-link.active {
+  color:var(--c1)!important;
+  border-bottom-color:var(--c1)!important;
+  background:transparent!important;
+  text-shadow:0 0 12px rgba(255,78,80,0.5)!important;
 }
 
-.form-control,.form-select,input[type=number],select{
-  background:var(--panel)!important;
-  border:1px solid var(--border)!important;
+/* ── SKEUOMORPHIC BUTTONS ── */
+.btn {
+  font-size:0.73rem!important;
+  text-transform:uppercase!important;
+  letter-spacing:1.1px!important;
+  font-weight:700!important;
+  border-radius:7px!important;
+  padding:10px 26px!important;
+  transition:all .08s ease!important;
+  cursor:pointer!important;
+}
+
+/* Primary — sunset red */
+.btn-primary {
+  background:linear-gradient(180deg,#ff6b5b 0%,#ff4e50 50%,#d93535 100%)!important;
+  border:1px solid #b02020!important;
+  color:#fff!important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.3) inset,
+    0 -2px 0 rgba(0,0,0,0.3) inset,
+    0 4px 10px rgba(255,78,80,0.5),
+    0 2px 4px rgba(0,0,0,0.5)!important;
+  text-shadow:0 -1px 0 rgba(0,0,0,0.4)!important;
+}
+.btn-primary:hover {
+  background:linear-gradient(180deg,#ff8070 0%,#ff6b5b 50%,#ff4e50 100%)!important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.35) inset,
+    0 -2px 0 rgba(0,0,0,0.25) inset,
+    0 6px 16px rgba(255,78,80,0.6),
+    0 2px 6px rgba(0,0,0,0.4)!important;
+}
+.btn-primary:active {
+  background:linear-gradient(180deg,#d93535 0%,#b02020 100%)!important;
+  box-shadow:0 2px 4px rgba(0,0,0,0.6) inset!important;
+  transform:translateY(1px)!important;
+}
+
+/* Warning — orange */
+.btn-warning {
+  background:linear-gradient(180deg,#ffaa55 0%,#fc913a 50%,#d97020 100%)!important;
+  border:1px solid #b05810!important;
+  color:#fff!important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.3) inset,
+    0 -2px 0 rgba(0,0,0,0.3) inset,
+    0 4px 10px rgba(252,145,58,0.5),
+    0 2px 4px rgba(0,0,0,0.5)!important;
+  text-shadow:0 -1px 0 rgba(0,0,0,0.35)!important;
+}
+.btn-warning:hover {
+  background:linear-gradient(180deg,#ffc070 0%,#ffaa55 50%,#fc913a 100%)!important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.35) inset,
+    0 -2px 0 rgba(0,0,0,0.25) inset,
+    0 6px 16px rgba(252,145,58,0.55),
+    0 2px 6px rgba(0,0,0,0.4)!important;
+}
+.btn-warning:active {
+  background:linear-gradient(180deg,#d97020 0%,#b05810 100%)!important;
+  box-shadow:0 2px 4px rgba(0,0,0,0.6) inset!important;
+  transform:translateY(1px)!important;
+}
+
+/* Default */
+.btn-default,.btn-secondary {
+  background:linear-gradient(180deg,#3a2510 0%,#251508 100%)!important;
+  border:1px solid #fc913a66!important;
+  color:#f9d62e!important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.08) inset,
+    0 -1px 0 rgba(0,0,0,0.4) inset,
+    0 2px 6px rgba(0,0,0,0.5)!important;
+}
+.btn-default:hover,.btn-secondary:hover {
+  background:linear-gradient(180deg,#4a3018 0%,#3a2510 100%)!important;
+  color:var(--c3)!important;
+}
+.btn-default:active,.btn-secondary:active {
+  box-shadow:0 2px 4px rgba(0,0,0,0.6) inset!important;
+  transform:translateY(1px)!important;
+}
+.btn-file {
+  background:linear-gradient(180deg,#3a2510,#251508)!important;
+  border:1px solid #fc913a55!important;
+  color:#f9d62e!important;
+  box-shadow:0 2px 6px rgba(0,0,0,0.5)!important;
+}
+
+/* ── INPUTS ── */
+label,.form-label {
+  font-size:0.68rem!important;
+  color:var(--c4)!important;
+  text-transform:uppercase!important;
+  letter-spacing:.08em!important;
+  font-weight:600!important;
+}
+.form-control,.form-select,input[type=number],select {
+  background:rgba(20,10,4,0.85)!important;
+  border:1px solid #fc913a55!important;
   color:var(--text)!important;
-  font-family:var(--sans)!important;
-  font-size:0.85rem!important;
-  font-weight:500!important;
-  border-radius:4px!important;
+  border-radius:5px!important;
   padding:6px 10px!important;
+  font-size:0.84rem!important;
+  box-shadow:0 2px 5px rgba(0,0,0,0.5) inset,0 1px 0 rgba(255,255,255,0.04)!important;
+  transition:border-color .15s,box-shadow .15s!important;
 }
-
-.form-control:focus,input:focus,select:focus{
-  border-color:var(--accent)!important;
-  box-shadow:0 0 0 3px rgba(94,160,255,.15)!important;
+.form-control:focus,input:focus,select:focus {
+  border-color:var(--c2)!important;
+  box-shadow:0 2px 5px rgba(0,0,0,0.5) inset,0 0 0 3px rgba(252,145,58,0.25)!important;
   outline:none!important;
 }
+select option { background:#1a0f05; color:var(--text); }
 
-select option{
-  background:var(--panel);
-  color:var(--text);
-}
-
-.irs--shiny .irs-bar{
-  background:var(--accent)!important;
-  border-color:var(--accent)!important;
-}
-
-.irs--shiny .irs-handle{
-  border-color:var(--accent)!important;
-  background:#fff!important;
-}
-
-.irs--shiny .irs-single{
-  background:var(--accent)!important;
-  color:#fff!important;
-  font-family:var(--sans)!important;
-  font-size:0.68rem!important;
-  font-weight:600!important;
-}
-
-.irs--shiny .irs-line{
-  background:var(--border)!important;
-}
-
+/* ── SLIDERS ── */
+.irs--shiny .irs-bar         { background:linear-gradient(90deg,var(--c1),var(--c2))!important; border-color:var(--c1)!important; }
+.irs--shiny .irs-handle      { border-color:var(--c2)!important; background:#fff8f0!important; box-shadow:0 2px 6px rgba(0,0,0,0.5)!important; }
+.irs--shiny .irs-single      { background:var(--c2)!important; color:#1a1008!important; font-size:0.65rem!important; font-weight:700!important; }
+.irs--shiny .irs-line        { background:#2a1508!important; box-shadow:0 1px 4px rgba(0,0,0,0.5) inset!important; }
 .irs--shiny .irs-grid-text,
 .irs--shiny .irs-min,
-.irs--shiny .irs-max{
-  color:#ffffff!important;
-  font-family:var(--sans)!important;
-  font-weight:500!important;
-  background:transparent!important;
+.irs--shiny .irs-max         { color:var(--c4)!important; background:transparent!important; }
+.irs--shiny .irs-grid-pol    { background:var(--c4)!important; }
+
+/* ── CARDS / PANELS ── */
+.card {
+  background:linear-gradient(160deg,rgba(30,15,5,0.92) 0%,rgba(18,9,3,0.95) 100%)!important;
+  border:1px solid #fc913a44!important;
+  border-radius:8px!important;
+  box-shadow:0 6px 20px rgba(0,0,0,0.6),0 1px 0 rgba(255,200,100,0.06) inset!important;
+}
+.card-body { padding:16px!important; }
+.well {
+  background:rgba(18,9,3,0.88)!important;
+  border:1px solid #fc913a44!important;
+  border-radius:8px!important;
+  box-shadow:0 3px 10px rgba(0,0,0,0.5) inset!important;
 }
 
-.irs--shiny .irs-grid-pol.small,
-.irs--shiny .irs-grid-pol{
-  background:#ffffff!important;
-}
-
-.btn{
-  font-size:0.75rem!important;
+/* ── NAV PILLS ── */
+.nav-pills .nav-link {
+  font-size:0.67rem!important;
+  color:var(--c4)!important;
+  border-radius:5px!important;
+  padding:5px 13px!important;
   text-transform:uppercase!important;
-  letter-spacing:.8px!important;
-  border-radius:4px!important;
-  padding:7px 18px!important;
-  font-weight:700!important;
-  font-family:var(--sans)!important;
-  transition:all .15s!important;
-}
-
-.btn-primary{
-  background:var(--accent)!important;
-  border-color:var(--accent)!important;
-  color:#fff!important;
-}
-
-.btn-primary:hover{
-  background:#3f83f8!important;
-  border-color:#3f83f8!important;
-}
-
-.btn-warning{
-  background:transparent!important;
-  border:1px solid var(--accent)!important;
-  color:var(--accent)!important;
-}
-
-.btn-warning:hover{
-  background:rgba(94,160,255,.08)!important;
-}
-
-.btn-default,.btn-secondary{
-  background:transparent!important;
-  border:1px solid var(--border)!important;
-  color:var(--dim)!important;
-}
-
-p{
-  font-size:0.72rem;
-  color:var(--dim);
-  margin:2px 0 10px;
-  font-family:var(--sans)!important;
-  font-weight:400!important;
-}
-
-.shiny-plot-output{
-  background:var(--panel)!important;
-  border:1px solid var(--border);
-  border-radius:4px;
-}
-
-pre,.shiny-verbatim-output{
-  background:#181818!important;
-  color:#f5f5f5!important;
-  border:1px solid var(--border)!important;
-  border-radius:4px!important;
-  font-family:var(--sans)!important;
-  font-size:0.8rem!important;
-  padding:14px!important;
-  line-height:1.8!important;
-}
-
-.leaflet-container{
-  border-radius:4px;
-  border:1px solid var(--border);
-}
-
-.well{
-  background:var(--panel)!important;
-  border:1px solid var(--border)!important;
-  border-radius:4px!important;
-  box-shadow:none!important;
-}
-
-.nav-pills .nav-link{
-  font-size:0.7rem!important;
-  color:var(--dim)!important;
-  border-radius:4px!important;
-  padding:5px 12px!important;
-  text-transform:uppercase!important;
-  letter-spacing:.05em!important;
-  background:transparent!important;
-  border:1px solid var(--border)!important;
+  letter-spacing:.08em!important;
+  background:linear-gradient(180deg,#3a2010 0%,#1e0e04 100%)!important;
+  border:1px solid #fc913a44!important;
   margin:2px!important;
   font-weight:600!important;
-  font-family:var(--sans)!important;
+  box-shadow:0 2px 5px rgba(0,0,0,0.4),0 1px 0 rgba(255,200,80,0.07) inset!important;
+  transition:all .12s!important;
 }
-
-.nav-pills .nav-link.active{
-  background:var(--accent)!important;
-  border-color:var(--accent)!important;
+.nav-pills .nav-link:hover {
+  background:linear-gradient(180deg,#4a2a14 0%,#2e1608 100%)!important;
+  color:var(--c3)!important;
+}
+.nav-pills .nav-link.active {
+  background:linear-gradient(180deg,#ff6b5b 0%,#ff4e50 50%,#d93535 100%)!important;
+  border-color:#b02020!important;
   color:#fff!important;
+  box-shadow:0 3px 10px rgba(255,78,80,0.45),0 1px 0 rgba(255,255,255,0.2) inset!important;
 }
 
-.card{
-  background:var(--panel)!important;
-  border:1px solid var(--border)!important;
-  border-radius:4px!important;
-  box-shadow:0 1px 3px rgba(0,0,0,.25)!important;
+/* ── TEXT ── */
+p { font-size:0.7rem; color:var(--c4); margin:2px 0 8px; }
+.tab-content { padding:20px 24px; }
+
+/* ── VERBATIM OUTPUT ── */
+pre,.shiny-verbatim-output {
+  background:rgba(8,4,0,0.92)!important;
+  color:#f9d62e!important;
+  border:1px solid #fc913a44!important;
+  border-radius:6px!important;
+  font-family:'Courier New',monospace!important;
+  font-size:0.78rem!important;
+  padding:14px!important;
+  line-height:1.9!important;
+  box-shadow:0 3px 10px rgba(0,0,0,0.6) inset!important;
 }
 
-.card-body{
-  padding:16px!important;
+.shiny-plot-output {
+  border:1px solid #fc913a44;
+  border-radius:6px;
+  box-shadow:0 6px 16px rgba(0,0,0,0.5);
+}
+.leaflet-container {
+  border-radius:6px;
+  border:1px solid #fc913a55;
+  box-shadow:0 6px 16px rgba(0,0,0,0.5);
 }
 
-.home-wrap{
-  display:flex;
-  flex-direction:column;
-  justify-content:center;
-  align-items:center;
-  height:70vh;
-  text-align:center;
+/* ── HOME ── */
+.home-wrap {
+  display:flex; flex-direction:column;
+  justify-content:center; align-items:center;
+  min-height:80vh; text-align:center;
+  position:relative;
 }
 
-.title-wrap{
-  display:flex;
-  align-items:center;
-  justify-content:center;
+/* sunset graphic behind title */
+.home-graphic {
+  position:absolute;
+  width:520px; height:520px;
+  border-radius:50%;
+  background:radial-gradient(ellipse at 50% 60%,
+    rgba(249,214,46,0.18) 0%,
+    rgba(252,145,58,0.14) 35%,
+    rgba(255,78,80,0.10) 60%,
+    transparent 75%);
+  box-shadow:
+    0 0 80px 20px rgba(249,214,46,0.12),
+    0 0 160px 60px rgba(252,145,58,0.08),
+    0 0 260px 100px rgba(255,78,80,0.05);
+  top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
+  z-index:0;
 }
 
-.home-title{
-  font-size:3.4rem;
-  font-weight:700;
-  color:var(--text);
-  letter-spacing:1px;
+/* horizon line */
+.home-horizon {
+  position:absolute;
+  bottom:28%; left:0; right:0;
+  height:1px;
+  background:linear-gradient(90deg,
+    transparent 0%, rgba(249,214,46,0.35) 20%,
+    rgba(252,145,58,0.6) 50%,
+    rgba(249,214,46,0.35) 80%, transparent 100%);
+  box-shadow:0 0 12px 2px rgba(252,145,58,0.3);
+  pointer-events:none;
+}
+
+/* silhouette mountains */
+.home-mountains {
+  position:absolute;
+  bottom:28%; left:0; right:0;
+  height:80px;
+  background:
+    polygon(0% 100%,8% 40%,16% 65%,26% 20%,36% 55%,
+            46% 30%,56% 60%,66% 15%,76% 50%,86% 35%,100% 55%,100% 100%);
+  clip-path:polygon(
+    0% 100%,  6% 55%,  12% 75%,
+    20% 30%,  28% 60%,  36% 20%,
+    44% 50%,  52% 35%,  60% 55%,
+    68% 10%,  76% 45%,  84% 30%,
+    92% 50%,  100% 40%, 100% 100%
+  );
+  background:#1a0a02;
+  opacity:0.85;
+  pointer-events:none;
+  z-index:1;
+}
+
+.home-content { position:relative; z-index:2; }
+.title-wrap { display:flex; align-items:center; justify-content:center; }
+.home-title {
+  font-size:5rem;
+  font-weight:800;
+  letter-spacing:3px;
   margin:0;
-  font-family:var(--sans)!important;
+  background:linear-gradient(135deg,#ff4e50 0%,#fc913a 35%,#f9d62e 65%,#e2f4c7 100%);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
   text-rendering:geometricPrecision;
+  filter:drop-shadow(0 0 20px rgba(252,145,58,0.4));
 }
-
-.cursor{
-  display:inline-block;
-  width:3px;
-  height:3.4rem;
-  background:white;
-  margin-left:4px;
-  vertical-align:middle;
-  animation:blink 0.7s step-end infinite;
+.cursor {
+  display:inline-block; width:4px; height:5rem;
+  background:linear-gradient(180deg,#f9d62e,#fc913a);
+  margin-left:8px; vertical-align:middle;
+  animation:blink .7s step-end infinite;
+  box-shadow:0 0 10px rgba(249,214,46,0.6);
+  border-radius:2px;
 }
-
 @keyframes blink { 50% { opacity:0; } }
-
-.home-sub{
-  font-size:0.85rem;
-  color:var(--dim);
-  letter-spacing:2px;
-  margin-top:8px;
-  text-transform:uppercase;
-  font-family:var(--sans)!important;
-  font-weight:500!important;
+.home-sub {
+  font-size:0.85rem; letter-spacing:4px;
+  margin-top:12px; text-transform:uppercase; font-weight:500;
+  color:var(--c4);
+  text-shadow:0 0 20px rgba(234,227,116,0.4);
 }
 
-.stab-box{
-  border:1px solid var(--border);
-  border-radius:4px;
-  padding:10px 14px;
-  margin-top:10px;
-  font-family:var(--sans)!important;
-  font-size:0.78rem;
-  line-height:1.9;
-  background:var(--panel);
-  font-weight:500!important;
+/* ── STABILITY BOX ── */
+.stab-box {
+  border-radius:6px; padding:12px 16px; margin-top:12px;
+  font-size:0.78rem; line-height:2; font-weight:500;
+  box-shadow:0 4px 14px rgba(0,0,0,0.5);
 }
+.stab-green  { color:#86efac; border:1px solid #22c55e; background:linear-gradient(160deg,rgba(13,40,24,0.9),rgba(19,34,24,0.92)); }
+.stab-yellow { color:#fde68a; border:1px solid #f59e0b; background:linear-gradient(160deg,rgba(43,31,8,0.9),rgba(43,33,17,0.92)); }
+.stab-red    { color:#fca5a5; border:1px solid #ef4444; background:linear-gradient(160deg,rgba(42,14,14,0.9),rgba(42,21,21,0.92)); }
 
-.stab-green{
-  color:#86efac;
-  border-color:#22c55e!important;
-  background:#132218!important;
+/* ── RUN TABLE ── */
+.run-table { width:100%; border-collapse:collapse; font-size:0.73rem; margin-top:10px; }
+.run-table th {
+  color:var(--c4); text-transform:uppercase; letter-spacing:.07em;
+  padding:6px 10px; border-bottom:2px solid #fc913a55; text-align:left; font-weight:700;
 }
-
-.stab-yellow{
-  color:#fde68a;
-  border-color:#f59e0b!important;
-  background:#2b2111!important;
+.run-table td {
+  color:var(--text); padding:6px 10px;
+  border-bottom:1px solid rgba(252,145,58,0.15); font-weight:500;
 }
+.run-table tr:hover td { background:rgba(252,145,58,0.07); }
 
-.stab-red{
-  color:#fca5a5;
-  border-color:#ef4444!important;
-  background:#2a1515!important;
-}
-
-.run-table{
-  width:100%;
-  border-collapse:collapse;
-  font-size:0.75rem;
-  margin-top:8px;
-  font-family:var(--sans)!important;
-}
-
-.run-table th{
-  color:var(--dim);
-  text-transform:uppercase;
-  letter-spacing:.05em;
-  padding:5px 8px;
-  border-bottom:2px solid var(--border);
-  text-align:left;
-  font-weight:700;
-}
-
-.run-table td{
-  color:var(--text);
-  padding:5px 8px;
-  border-bottom:1px solid var(--border);
-  font-weight:500;
-}
-
-.run-table tr:hover td{
-  background:#303030;
+/* ── UNIT INPUT ── */
+.unit-row-wrap { margin-bottom:10px; }
+.unit-row { display:flex; gap:6px; align-items:center; }
+.num-wrap { flex:2; }
+.sel-wrap { flex:1; }
+.unit-lbl {
+  font-size:0.67rem; color:var(--c4); text-transform:uppercase;
+  letter-spacing:.08em; font-weight:600; display:block; margin-bottom:3px;
 }
 "
 
-unit_input <- function(input_id, label, default_val, default_unit, choices, width = "100%") {
-  div(style = "margin-bottom: 10px;",
-      tags$label(
-        style = "font-family:var(--sans);font-size:0.72rem;color:var(--dim);
-                 text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:3px;",
-        label
-      ),
-      div(style = "display:flex; gap:6px; align-items:center;",
-          numericInput(input_id, label = NULL, value = default_val, width = "65%"),
-          selectInput(paste0(input_id, "_unit"), label = NULL,
-                      choices = choices, selected = default_unit, width = "35%")
+unit_input <- function(input_id, label, default_val, default_unit, choices) {
+  div(class="unit-row-wrap",
+      tags$label(class="unit-lbl", label),
+      div(class="unit-row",
+          div(class="num-wrap",
+              numericInput(input_id, label=NULL, value=default_val, width="100%")),
+          div(class="sel-wrap",
+              selectInput(paste0(input_id,"_unit"), label=NULL,
+                          choices=choices, selected=default_unit, width="100%"))
       )
   )
 }
@@ -663,7 +766,27 @@ unit_input <- function(input_id, label, default_val, default_unit, choices, widt
 ui <- tagList(
   tags$head(tags$style(HTML(css))),
   navbarPage(
-    title="RRRocket 3D",
+    title = div(
+      style = "display:flex; align-items:center; gap:18px;",
+      span(style = paste0(
+        "font-size:1.4rem; font-weight:800; letter-spacing:3px;",
+        "background:linear-gradient(90deg,#ff4e50,#fc913a,#f9d62e);",
+        "-webkit-background-clip:text; -webkit-text-fill-color:transparent;"
+      ), "RRRocket 3D"),
+      tags$a(
+        href="https://github.com/tatecommission/rrrocket",
+        target="_blank",
+        style=paste0(
+          "font-size:0.65rem; font-weight:700; letter-spacing:1px;",
+          "text-transform:uppercase; color:#eae374; text-decoration:none;",
+          "border:1px solid #fc913a55; border-radius:5px; padding:4px 10px;",
+          "background:rgba(252,145,58,0.1);",
+          "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset, 0 2px 5px rgba(0,0,0,0.4);",
+          "transition:all .15s;"
+        ),
+        "GitHub ↗"
+      )
+    ),
     theme=bs_theme(version=5,bg="#f5f6f8",fg="#111928",primary="#1a56db"),
     
     tabPanel("Home",
@@ -696,61 +819,86 @@ ui <- tagList(
                column(5,
                       navset_card_pill(
                         nav_panel("Rocket",
-                                  unit_input("dry_mass_val",  "Dry mass",               90,  "g",  unit_choices_mass),
-                                  unit_input("diameter",      "Body tube diameter",      24,  "mm", unit_choices_length),
-                                  unit_input("body_length",   "Body tube length",        300, "mm", unit_choices_length),
-                                  unit_input("cg_measured",   "CG from nose tip (dry)",  220, "mm", unit_choices_length)
+                                  unit_input("dry_mass_val", "Dry mass",             90,  "g",   unit_choices_mass),
+                                  unit_input("diameter",     "Body tube diameter",   24,  "mm",  unit_choices_length),
+                                  unit_input("body_length",  "Body tube length",     300, "mm",  unit_choices_length),
+                                  unit_input("cg_measured",  "CG from nose tip",     220, "mm",  unit_choices_length)
                         ),
                         nav_panel("Nosecone",
-                                  selectInput("nose_type", "Nosecone type", choices = c("ogive","conical","parabolic")),
-                                  unit_input("nose_length", "Nosecone length", 70, "mm", unit_choices_length)
+                                  selectInput("nose_type","Nosecone type",choices=c("ogive","conical","parabolic")),
+                                  unit_input("nose_length","Nosecone length",70,"mm",unit_choices_length)
                         ),
                         nav_panel("Fins",
-                                  numericInput("fin_count", "Number of fins", value = 3),
+                                  numericInput("fin_count","Number of fins",value=3),
                                   unit_input("fin_root",  "Root chord",   50, "mm", unit_choices_length),
                                   unit_input("fin_tip",   "Tip chord",    25, "mm", unit_choices_length),
                                   unit_input("fin_span",  "Semi-span",    30, "mm", unit_choices_length),
                                   unit_input("fin_sweep", "Sweep length", 20, "mm", unit_choices_length)
                         ),
                         nav_panel("Chute",
-                                  unit_input("parachute_diameter", "Chute diameter", 305, "mm", unit_choices_length)
+                                  unit_input("parachute_diameter","Chute diameter",305,"mm",unit_choices_length)
                         ),
                         nav_panel("Launch",
-                                  unit_input("rail_length",    "Rail length",  0.9, "m",   unit_choices_length),
-                                  unit_input("wind_speed_val", "Wind speed",   3,   "m/s", unit_choices_speed),
-                                  sliderInput("wind_dir", "Wind from (deg CW from N)", min=0, max=360, value=270),
-                                  numericInput("launch_angle", "Launch angle from vertical (deg)", value=0, min=0, max=30),
-                                  sliderInput("launch_bearing", "Launch bearing (deg CW from N)", value=0, min=0, max=360)
+                                  unit_input("rail_length",   "Rail length", 0.9, "m",   unit_choices_length),
+                                  unit_input("wind_speed_val","Wind speed",  3,   "m/s", unit_choices_speed),
+                                  sliderInput("wind_dir","Wind from (° CW from N)",min=0,max=360,value=270),
+                                  numericInput("launch_angle","Launch angle from vertical (°)",value=0,min=0,max=30),
+                                  sliderInput("launch_bearing","Launch bearing (° CW from N)",value=0,min=0,max=360)
                         ),
                         nav_panel("Engine",
-                                  fileInput("motor_file", NULL, accept=".eng", buttonLabel="Upload .eng"),
-                                  numericInput("parachute_delay", "Ejection delay (s)", value=4),
-                                  selectInput("engine_choice", "Or choose an engine:",
-                                              choices = c("Select engine..."="","A8","A10","B4","B6","C6","C11",
-                                                          "D12","E12","E16","G40","L2350"),
-                                              selected="B6", size=5, selectize=FALSE)
+                                  fileInput("motor_file",NULL,accept=".eng",buttonLabel="Upload .eng"),
+                                  numericInput("parachute_delay","Ejection delay (s)",value=4),
+                                  selectInput("engine_choice","Or choose an engine:",
+                                              choices=c("Select engine..."="","A8","A10","B4","B6","C6","C11",
+                                                        "D12","E12","E16","G40","L2350"),
+                                              selected="B6", size=6, selectize=FALSE)
                         )
-                      ),            
-                      uiOutput("stability_indicator")),
-               column(7,plotOutput("thrust_curve_plot",height="420px")))),
+                      ),
+                      br(),
+                      uiOutput("stability_indicator")
+               ),
+               column(7,
+                      plotOutput("thrust_curve_plot", height="400px"),
+                      br(),
+                      div(style="text-align:right;",
+                          radioButtons("units", label=NULL,
+                                       choices=c("Metric"="metric","Imperial"="imperial"),
+                                       selected="metric", inline=TRUE))
+               )
+             )
+    ),
     
-    tabPanel("Simulation",
-             sliderInput("precision","Integration interval (s)",value=0.01,min=0.001,max=0.1),
-             p("0.01 s recommended for accuracy"),
-             actionButton("run","Simulate",class="btn-primary"),
-             br(),br(),
-             h5(style="color:var(--dim);font-family:var(--sans);font-size:0.8rem;text-transform:uppercase;letter-spacing:1px;","Run history"),
-             uiOutput("run_history_table")),
-    
-    tabPanel("Results",
-             plotOutput("altitude_plot"),
-             plotOutput("velocity_plot"),
-             verbatimTextOutput("summary")),
-    
-    tabPanel("3D Track",
-             plotlyOutput("track_3d",width="100%",height="780px"),
-             verbatimTextOutput("landing_summary")),
-    
+    tabPanel("Simulate",
+             fluidRow(
+               # LEFT — controls + summary
+               column(4,
+                      div(style="margin-bottom:16px;",
+                          sliderInput("precision","Integration interval (s)",
+                                      value=0.01,min=0.001,max=0.1),
+                          p("0.01 s recommended"),
+                          div(style="display:flex;gap:10px;align-items:center;",
+                              actionButton("run","Simulate",class="btn-primary"),
+                              radioButtons("units",label=NULL,
+                                           choices=c("m"="metric","ft"="imperial"),
+                                           selected="metric",inline=TRUE)
+                          )
+                      ),
+                      verbatimTextOutput("summary"),
+                      br(),
+                      verbatimTextOutput("landing_summary"),
+                      br(),
+                      h5(style="color:var(--dim);font-size:0.75rem;text-transform:uppercase;letter-spacing:1px;",
+                         "Run history"),
+                      uiOutput("run_history_table")
+               ),
+               # RIGHT — plots
+               column(8,
+                      plotOutput("altitude_plot", height="240px"),
+                      plotOutput("velocity_plot", height="240px"),
+                      plotlyOutput("track_3d",    height="420px")
+               )
+             )
+    ),
     tabPanel("Monte Carlo",
              sidebarLayout(
                sidebarPanel(
@@ -777,22 +925,22 @@ ui <- tagList(
 )             
 
 theme_plot <- function() {
-  theme_minimal(base_size=11)+theme(
-    plot.background  = element_rect(fill="#ffffff",color=NA),
-    panel.background = element_rect(fill="#ffffff",color=NA),
-    panel.grid.major = element_line(color="#e8eaf0",linewidth=0.4),
+  theme_minimal(base_size=11) + theme(
+    plot.background  = element_rect(fill="#120800", color=NA),
+    panel.background = element_rect(fill="#120800", color=NA),
+    panel.grid.major = element_line(color="#3a2010", linewidth=0.4),
     panel.grid.minor = element_blank(),
-    panel.border     = element_rect(color="#d0d5de",fill=NA,linewidth=0.5),
-    axis.text        = element_text(color="#6b7280",size=8),
-    axis.title       = element_text(color="#374151",size=9),
-    plot.title       = element_text(color="#111928",size=11,face="bold"),
+    panel.border     = element_rect(color="#fc913a44", fill=NA, linewidth=0.5),
+    axis.text        = element_text(color="#eae374", size=8),
+    axis.title       = element_text(color="#fc913a", size=9),
+    plot.title       = element_text(color="#f9d62e", size=11, face="bold"),
     plot.margin      = margin(8,12,8,8))
-  }
+}
 
 server <- function(input, output, session) {
   
   use_metric <- reactiveVal(TRUE)
-  observeEvent(input$units,  { use_metric(input$units=="metric");  updateRadioButtons(session,"units2",selected=input$units)  },ignoreInit=TRUE)
+  observeEvent(input$units, { use_metric(input$units == "metric") }, ignoreInit=TRUE)
 
 
   # SI value stores — these are what the model always reads
@@ -1016,7 +1164,7 @@ server <- function(input, output, session) {
     alt  <- if(use_metric()) r$altitude else r$altitude*m_to_ft
     ylab <- if(use_metric())"altitude (m)"else"altitude (ft)"
     ggplot(data.frame(t=r$time,alt=alt),aes(t,alt))+
-      geom_area(fill="#1a56db",alpha=0.07)+geom_line(color="#1a56db",linewidth=1)+
+      geom_area(fill="#fc913a", alpha=0.15)+geom_line(color="#fc913a", linewidth=1)+
       geom_hline(yintercept=0,color="#e8eaf0")+
       labs(x="time (s)",y=ylab,title="Altitude")+theme_plot()
   })
@@ -1026,8 +1174,8 @@ server <- function(input, output, session) {
     vz   <- if(use_metric()) r$vz else r$vz*m_to_ft
     ylab <- if(use_metric())"vertical velocity (m/s)"else"vertical velocity (ft/s)"
     ggplot(data.frame(t=r$time,vz=vz),aes(t,vz))+
-      geom_line(color="#0e9f6e",linewidth=1)+
-      geom_hline(yintercept=0,color="#d0d5de",linetype="dashed")+
+      geom_line(color="#f9d62e", linewidth=1)+
+      geom_hline(yintercept=0, color="#fc913a44", linetype="dashed")+
       labs(x="time (s)",y=ylab,title="Vertical velocity")+theme_plot()
   })
   
