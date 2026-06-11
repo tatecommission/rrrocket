@@ -406,14 +406,10 @@ input,select,
   min-height:58px!important;
 }
 .navbar-brand {
-  font-size:1.5rem!important;
-  font-weight:800!important;
-  letter-spacing:3px!important;
-  background:linear-gradient(90deg,var(--c1),var(--c2),var(--c3))!important;
-  -webkit-background-clip:text!important;
-  -webkit-text-fill-color:transparent!important;
-  text-shadow:none!important;
-  padding:10px 0!important;
+  display:flex!important;
+  align-items:center!important;
+  padding:8px 0!important;
+  gap:0!important;
 }
 .nav-link {
   font-size:0.73rem!important;
@@ -748,6 +744,11 @@ pre,.shiny-verbatim-output {
   font-size:0.67rem; color:var(--c4); text-transform:uppercase;
   letter-spacing:.08em; font-weight:600; display:block; margin-bottom:3px;
 }
+
+/* hide empty verbatim boxes */
+.shiny-verbatim-output:empty { display:none!important; }
+pre:empty                     { display:none!important; }
+
 "
 
 unit_input <- function(input_id, label, default_val, default_unit, choices) {
@@ -766,23 +767,23 @@ unit_input <- function(input_id, label, default_val, default_unit, choices) {
 ui <- tagList(
   tags$head(tags$style(HTML(css))),
   navbarPage(
-    title = div(
-      style = "display:flex; align-items:center; gap:18px;",
-      span(style = paste0(
-        "font-size:1.4rem; font-weight:800; letter-spacing:3px;",
+    title = tagList(
+      span(style=paste0(
+        "font-size:1.4rem;font-weight:800;letter-spacing:3px;",
         "background:linear-gradient(90deg,#ff4e50,#fc913a,#f9d62e);",
-        "-webkit-background-clip:text; -webkit-text-fill-color:transparent;"
+        "-webkit-background-clip:text;-webkit-text-fill-color:transparent;",
+        "vertical-align:middle;line-height:1;"
       ), "RRRocket 3D"),
       tags$a(
         href="https://github.com/tatecommission/rrrocket",
         target="_blank",
         style=paste0(
-          "font-size:0.65rem; font-weight:700; letter-spacing:1px;",
-          "text-transform:uppercase; color:#eae374; text-decoration:none;",
-          "border:1px solid #fc913a55; border-radius:5px; padding:4px 10px;",
-          "background:rgba(252,145,58,0.1);",
-          "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset, 0 2px 5px rgba(0,0,0,0.4);",
-          "transition:all .15s;"
+          "font-size:0.65rem;font-weight:700;letter-spacing:1px;",
+          "text-transform:uppercase;color:#eae374;text-decoration:none;",
+          "border:1px solid #fc913a55;border-radius:5px;padding:4px 10px;",
+          "background:rgba(252,145,58,0.1);vertical-align:middle;",
+          "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset,0 2px 5px rgba(0,0,0,0.4);",
+          "margin-left:14px;display:inline-block;"
         ),
         "GitHub ↗"
       )
@@ -850,7 +851,7 @@ ui <- tagList(
                                   numericInput("parachute_delay","Ejection delay (s)",value=4),
                                   selectInput("engine_choice","Or choose an engine:",
                                               choices=c("Select engine..."="","A8","A10","B4","B6","C6","C11",
-                                                        "D12","E12","E16","G40","L2350"),
+                                                        "D12","E12","E16","G40"),
                                               selected="B6", size=6, selectize=FALSE)
                         )
                       ),
@@ -869,33 +870,65 @@ ui <- tagList(
     ),
     
     tabPanel("Simulate",
+             br(),
              fluidRow(
-               # LEFT — controls + summary
-               column(4,
-                      div(style="margin-bottom:16px;",
+               # LEFT COLUMN — controls
+               column(3,
+                      div(class="card", style="padding:16px;",
+                          h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:12px;",
+                             "Settings"),
                           sliderInput("precision","Integration interval (s)",
-                                      value=0.01,min=0.001,max=0.1),
+                                      value=0.01, min=0.001, max=0.1),
                           p("0.01 s recommended"),
-                          div(style="display:flex;gap:10px;align-items:center;",
-                              actionButton("run","Simulate",class="btn-primary"),
-                              radioButtons("units",label=NULL,
-                                           choices=c("m"="metric","ft"="imperial"),
-                                           selected="metric",inline=TRUE)
-                          )
+                          div(style="margin:10px 0 6px;",
+                              tags$label(class="unit-lbl","Display units")),
+                          radioButtons("units", label=NULL,
+                                       choices=c("Metric (m/s)"="metric","Imperial (ft/s)"="imperial"),
+                                       selected="metric", inline=FALSE),
+                          br(),
+                          actionButton("run","▶  Simulate", class="btn-primary",
+                                       style="width:100%;")
                       ),
-                      verbatimTextOutput("summary"),
                       br(),
-                      verbatimTextOutput("landing_summary"),
-                      br(),
-                      h5(style="color:var(--dim);font-size:0.75rem;text-transform:uppercase;letter-spacing:1px;",
-                         "Run history"),
-                      uiOutput("run_history_table")
+                      # summary only shows after run
+                      conditionalPanel("output.has_results",
+                                       div(class="card", style="padding:16px;",
+                                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
+                                              "Flight summary"),
+                                           verbatimTextOutput("summary")
+                                       ),
+                                       br(),
+                                       div(class="card", style="padding:16px;",
+                                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
+                                              "Landing drift"),
+                                           verbatimTextOutput("landing_summary")
+                                       ),
+                                       br(),
+                                       div(class="card", style="padding:16px;",
+                                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
+                                              "Run history"),
+                                           uiOutput("run_history_table")
+                                       )
+                      )
                ),
-               # RIGHT — plots
-               column(8,
-                      plotOutput("altitude_plot", height="240px"),
-                      plotOutput("velocity_plot", height="240px"),
-                      plotlyOutput("track_3d",    height="420px")
+               # RIGHT COLUMN — plots
+               column(9,
+                      conditionalPanel("output.has_results",
+                                       fluidRow(
+                                         column(6, plotOutput("altitude_plot", height="260px")),
+                                         column(6, plotOutput("velocity_plot", height="260px"))
+                                       ),
+                                       br(),
+                                       plotlyOutput("track_3d", height="460px")
+                      ),
+                      # placeholder before first run
+                      conditionalPanel("!output.has_results",
+                                       div(style=paste0(
+                                         "display:flex;align-items:center;justify-content:center;",
+                                         "height:500px;color:#fc913a66;font-size:0.85rem;",
+                                         "text-transform:uppercase;letter-spacing:2px;"
+                                       ), "Press Simulate to run a flight")
+                      )
                )
              )
     ),
@@ -917,10 +950,68 @@ ui <- tagList(
                  leafletOutput("map", height=600),
                  p("Click map to set launch position"),
                  actionButton("run_mc", "Run Monte Carlo", class="btn-warning"),
-                 verbatimTextOutput("landing_pct")
+                 conditionalPanel("output.has_mc",
+                                  div(class="card", style="padding:14px;margin-top:12px;",
+                                      verbatimTextOutput("landing_pct"))
+                 )
                )         
              )          
-    )         
+    ),
+    tabPanel("About",
+             div(style="max-width:700px;margin:40px auto;",
+                 div(class="card", style="padding:32px;",
+                     h3(style="color:var(--c2);font-weight:800;letter-spacing:1px;margin-bottom:4px;",
+                        "RRRocket 3D"),
+                     p(style="color:var(--c4);font-size:0.8rem;letter-spacing:2px;text-transform:uppercase;margin-bottom:24px;",
+                       "Model rocket flight simulator"),
+                     tags$hr(style="border-color:#fc913a33;margin-bottom:24px;"),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
+                        "What it does"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "RRRocket 3D simulates low-power model rocket flights in three dimensions,
+         accounting for aerodynamic drag, motor thrust curves, wind weathercocking,
+         parachute descent, and atmospheric density variation with altitude.
+         A Monte Carlo engine propagates uncertainty in wind, ejection delay,
+         and build tolerances to produce a probabilistic landing footprint."),
+                     br(),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
+                        "Physics"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Aerodynamics use the extended Barrowman equations with a body-lift correction term.
+         Drag is corrected for Mach number using a Prandtl-Glauert factor below Mach 0.8
+         and a transonic ramp above it. Atmospheric density follows the
+         International Standard Atmosphere model. Wind turbulence is modeled with
+         an Ornstein-Uhlenbeck process driven by Weibull-distributed gust amplitudes."),
+                     br(),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
+                        "Monte Carlo"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Each Monte Carlo run perturbs wind speed, wind direction, ejection delay,
+         drag coefficient, dry mass, and propellant mass by user-specified standard
+         deviations. Landing points are plotted on satellite imagery and scored
+         against a user-drawn safe zone polygon. The 95th percentile drift radius
+         is the recommended metric for NAR/Tripoli range safety submissions."),
+                     br(),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
+                        "Engine data"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Thrust curves use the standard RASP .eng file format.
+         Built-in curves are included for common Estes A–D motors.
+         Upload any .eng file from",
+                       tags$a(href="https://www.thrustcurve.org", target="_blank",
+                              style="color:var(--c2);", "thrustcurve.org"),
+                       "for higher-power motors."),
+                     br(),
+                     tags$hr(style="border-color:#fc913a33;margin:8px 0 20px;"),
+                     div(style="display:flex;gap:12px;",
+                         tags$a(href="https://github.com/tatecommission/rrrocket",
+                                target="_blank", class="btn btn-default", "GitHub"),
+                         tags$a(href="https://www.thrustcurve.org",
+                                target="_blank", class="btn btn-default", "ThrustCurve.org")
+                     )
+                 )
+             )
+    )
   )           
 )             
 
@@ -942,7 +1033,13 @@ server <- function(input, output, session) {
   use_metric <- reactiveVal(TRUE)
   observeEvent(input$units, { use_metric(input$units == "metric") }, ignoreInit=TRUE)
 
+  # for conditional panel above
+  output$has_results <- reactive({ !is.null(results()) })
+  outputOptions(output, "has_results", suspendWhenHidden=FALSE)
 
+  output$has_mc <- reactive({ !is.null(monte_carlo()) })
+  outputOptions(output, "has_mc", suspendWhenHidden=FALSE)
+  
   # SI value stores — these are what the model always reads
   si <- list(
     dry_mass         = reactiveVal(0.090),
@@ -1083,7 +1180,7 @@ server <- function(input, output, session) {
     div(class = paste("stab-box", cls),
         tags$b(sprintf("%s — %.2f cal", lbl, sm)),
         tags$br(),
-        sprintf("CP: %s   CG: %s", fmt(al$CP), fmt(al$cg_loaded)),
+        sprintf("CP: %s       CG: %s", fmt(al$CP), fmt(al$cg_loaded)),
         tags$br(),
         if (!is.null(motor_data()))
           sprintf("Stability at burnout: %.2f cal", al$stability_margin)
