@@ -1,3 +1,4 @@
+###NEW VERSION
 library(shiny)
 library(bslib)
 library(plotly)
@@ -280,7 +281,7 @@ parse_thrust_input <- function(motor_file, engine_choice) {
   read_eng <- function(lines) {
     lines <- lines[!grepl("^;",lines)]
     hdr   <- strsplit(trimws(lines[1]),"\\s+")[[1]]
-    pm    <- as.numeric(hdr[5])
+    pm <- as.numeric(hdr[5]) / 1000
     pairs <- lapply(lines[-1],function(l) as.numeric(strsplit(trimws(l),"\\s+")[[1]]))
     pairs <- Filter(function(p) length(p) >= 2 && !anyNA(p), pairs)
     list(thrust_curve=data.frame(time=sapply(pairs,`[`,1),thrust=sapply(pairs,`[`,2)),
@@ -745,10 +746,13 @@ pre,.shiny-verbatim-output {
   letter-spacing:.08em; font-weight:600; display:block; margin-bottom:3px;
 }
 
-/* hide empty verbatim boxes */
-.shiny-verbatim-output:empty { display:none!important; }
-pre:empty                     { display:none!important; }
+/* stop run summary table from bleeding onto right */
+.run-table { table-layout:fixed; word-break:break-word; }
+.run-table td, .run-table th { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
+.navbar-nav.navbar-right-custom {
+  margin-left: auto !important;
+}
 "
 
 unit_input <- function(input_id, label, default_val, default_unit, choices) {
@@ -767,28 +771,13 @@ unit_input <- function(input_id, label, default_val, default_unit, choices) {
 ui <- tagList(
   tags$head(tags$style(HTML(css))),
   navbarPage(
-    title = tagList(
-      span(style=paste0(
-        "font-size:1.4rem;font-weight:800;letter-spacing:3px;",
-        "background:linear-gradient(90deg,#ff4e50,#fc913a,#f9d62e);",
-        "-webkit-background-clip:text;-webkit-text-fill-color:transparent;",
-        "vertical-align:middle;line-height:1;"
-      ), "RRRocket 3D"),
-      tags$a(
-        href="https://github.com/tatecommission/rrrocket",
-        target="_blank",
-        style=paste0(
-          "font-size:0.65rem;font-weight:700;letter-spacing:1px;",
-          "text-transform:uppercase;color:#eae374;text-decoration:none;",
-          "border:1px solid #fc913a55;border-radius:5px;padding:4px 10px;",
-          "background:rgba(252,145,58,0.1);vertical-align:middle;",
-          "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset,0 2px 5px rgba(0,0,0,0.4);",
-          "margin-left:14px;display:inline-block;"
-        ),
-        "GitHub ↗"
-      )
-    ),
-    theme=bs_theme(version=5,bg="#f5f6f8",fg="#111928",primary="#1a56db"),
+    title = span(style=paste0(
+      "font-size:1.4rem;font-weight:800;letter-spacing:3px;",
+      "background:linear-gradient(90deg,#ff4e50,#fc913a,#f9d62e);",
+      "-webkit-background-clip:text;-webkit-text-fill-color:transparent;",
+      "vertical-align:middle;line-height:1;"
+    ), "RRRocket 3D"),
+    theme = bs_theme(version=5, bg="#f5f6f8", fg="#111928", primary="#1a56db"),
     
     tabPanel("Home",
              tags$script(HTML("
@@ -820,10 +809,10 @@ ui <- tagList(
                column(5,
                       navset_card_pill(
                         nav_panel("Rocket",
-                                  unit_input("dry_mass_val", "Dry mass",             90,  "g",   unit_choices_mass),
-                                  unit_input("diameter",     "Body tube diameter",   24,  "mm",  unit_choices_length),
-                                  unit_input("body_length",  "Body tube length",     300, "mm",  unit_choices_length),
-                                  unit_input("cg_measured",  "CG from nose tip",     220, "mm",  unit_choices_length)
+                                  unit_input("dry_mass_val", "Dry mass",            90,  "g",   unit_choices_mass),
+                                  unit_input("diameter",     "Body tube diameter",  24,  "mm",  unit_choices_length),
+                                  unit_input("body_length",  "Body tube length",    300, "mm",  unit_choices_length),
+                                  unit_input("cg_measured",  "CG from nose tip",    220, "mm",  unit_choices_length)
                         ),
                         nav_panel("Nosecone",
                                   selectInput("nose_type","Nosecone type",choices=c("ogive","conical","parabolic")),
@@ -859,12 +848,7 @@ ui <- tagList(
                       uiOutput("stability_indicator")
                ),
                column(7,
-                      plotOutput("thrust_curve_plot", height="400px"),
-                      br(),
-                      div(style="text-align:right;",
-                          radioButtons("units", label=NULL,
-                                       choices=c("Metric"="metric","Imperial"="imperial"),
-                                       selected="metric", inline=TRUE))
+                      plotOutput("thrust_curve_plot", height="400px")
                )
              )
     ),
@@ -872,101 +856,91 @@ ui <- tagList(
     tabPanel("Simulate",
              br(),
              fluidRow(
-               # LEFT COLUMN — controls
                column(3,
                       div(class="card", style="padding:16px;",
                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:12px;",
                              "Settings"),
-                          sliderInput("precision","Integration interval (s)",
-                                      value=0.01, min=0.001, max=0.1),
+                          sliderInput("precision","Integration interval (s)",value=0.01,min=0.001,max=0.1),
                           p("0.01 s recommended"),
                           div(style="margin:10px 0 6px;",
                               tags$label(class="unit-lbl","Display units")),
-                          radioButtons("units", label=NULL,
-                                       choices=c("Metric (m/s)"="metric","Imperial (ft/s)"="imperial"),
-                                       selected="metric", inline=FALSE),
+                          radioButtons("units",label=NULL,
+                                       choices=c("Metric"="metric","Imperial (ft)"="imperial"),
+                                       selected="metric",inline=FALSE),
                           br(),
-                          actionButton("run","▶  Simulate", class="btn-primary",
-                                       style="width:100%;")
+                          actionButton("run","> Simulate",class="btn-primary",style="width:100%;")
                       ),
                       br(),
-                      # summary only shows after run
                       conditionalPanel("output.has_results",
-                                       div(class="card", style="padding:16px;",
+                                       div(class="card",style="padding:16px;",
                                            h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
                                               "Flight summary"),
                                            verbatimTextOutput("summary")
-                                       ),
-                                       br(),
-                                       div(class="card", style="padding:16px;",
-                                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
-                                              "Landing drift"),
-                                           verbatimTextOutput("landing_summary")
-                                       ),
-                                       br(),
-                                       div(class="card", style="padding:16px;",
-                                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
-                                              "Run history"),
-                                           uiOutput("run_history_table")
                                        )
                       )
                ),
-               # RIGHT COLUMN — plots
                column(9,
                       conditionalPanel("output.has_results",
                                        fluidRow(
-                                         column(6, plotOutput("altitude_plot", height="260px")),
-                                         column(6, plotOutput("velocity_plot", height="260px"))
+                                         column(6, plotOutput("altitude_plot",height="260px")),
+                                         column(6, plotOutput("velocity_plot",height="260px"))
                                        ),
                                        br(),
-                                       plotlyOutput("track_3d", height="460px")
+                                       plotlyOutput("track_3d",height="420px")
                       ),
-                      # placeholder before first run
                       conditionalPanel("!output.has_results",
                                        div(style=paste0(
                                          "display:flex;align-items:center;justify-content:center;",
-                                         "height:500px;color:#fc913a66;font-size:0.85rem;",
+                                         "height:500px;color:#fc913a44;font-size:0.85rem;",
                                          "text-transform:uppercase;letter-spacing:2px;"
-                                       ), "Press Simulate to run a flight")
+                                       ), "▶  Press Simulate to run a flight")
                       )
                )
+             ),
+             br(),
+             conditionalPanel("output.has_results",
+                              div(class="card",style="padding:16px;overflow-x:auto;",
+                                  h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
+                                     "Run history"),
+                                  uiOutput("run_history_table")
+                              )
              )
     ),
+    
     tabPanel("Monte Carlo",
              sidebarLayout(
                sidebarPanel(
                  numericInput("mc_runs","Monte Carlo runs",value=200,min=10,max=1000),
                  p("0.05 s recommended for speed/accuracy balance"),
-                 sliderInput("chute_delay_std_dev",  "Ejection delay sd (s)",      value=1,  min=0.1,max=5),
-                 sliderInput("launch_angle_std_dev", "Launch angle sd (deg)",      value=5,  min=0.1,max=10),
-                 sliderInput("wind_speed_std_dev",   "Wind speed sd (%)",          value=5,  min=1,  max=99),
-                 sliderInput("wind_dir_std_dev",     "Wind direction sd (deg)",    value=30, min=1,  max=180),
-                 sliderInput("dry_mass_std_dev",     "Dry mass sd (%)",            value=2,  min=0,  max=10),
-                 sliderInput("cd_std_dev",           "Drag coefficient sd (%)",    value=10, min=0,  max=30),
-                 sliderInput("prop_mass_std_dev",    "Propellant mass sd (%)",     value=2,  min=0,  max=10),
-                 sliderInput("montecarlo_precision", "Integration interval (s)", 
-                           value=0.05, min=0.005, max=0.2)),
+                 sliderInput("chute_delay_std_dev",  "Ejection delay sd (s)",   value=1,  min=0.1,max=5),
+                 sliderInput("launch_angle_std_dev", "Launch angle sd (deg)",   value=5,  min=0.1,max=10),
+                 sliderInput("wind_speed_std_dev",   "Wind speed sd (%)",       value=5,  min=1,  max=99),
+                 sliderInput("wind_dir_std_dev",     "Wind direction sd (deg)", value=30, min=1,  max=180),
+                 sliderInput("dry_mass_std_dev",     "Dry mass sd (%)",         value=2,  min=0,  max=10),
+                 sliderInput("cd_std_dev",           "Drag coefficient sd (%)", value=10, min=0,  max=30),
+                 sliderInput("prop_mass_std_dev",    "Propellant mass sd (%)",  value=2,  min=0,  max=10),
+                 sliderInput("montecarlo_precision", "Integration interval (s)",value=0.05,min=0.005,max=0.2)
+               ),
                mainPanel(
-                 leafletOutput("map", height=600),
+                 leafletOutput("map",height=600),
                  p("Click map to set launch position"),
-                 actionButton("run_mc", "Run Monte Carlo", class="btn-warning"),
+                 actionButton("run_mc","> Run Monte Carlo",class="btn-warning"),
                  conditionalPanel("output.has_mc",
-                                  div(class="card", style="padding:14px;margin-top:12px;",
+                                  div(class="card",style="padding:14px;margin-top:12px;",
                                       verbatimTextOutput("landing_pct"))
                  )
-               )         
-             )          
+               )
+             )
     ),
+    
     tabPanel("About",
              div(style="max-width:700px;margin:40px auto;",
-                 div(class="card", style="padding:32px;",
-                     h3(style="color:var(--c2);font-weight:800;letter-spacing:1px;margin-bottom:4px;",
-                        "RRRocket 3D"),
+                 div(class="card",style="padding:32px;",
+                     h3(style="color:var(--c2);font-weight:800;letter-spacing:1px;margin-bottom:4px;","RRRocket 3D"),
                      p(style="color:var(--c4);font-size:0.8rem;letter-spacing:2px;text-transform:uppercase;margin-bottom:24px;",
                        "Model rocket flight simulator"),
                      tags$hr(style="border-color:#fc913a33;margin-bottom:24px;"),
-                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
-                        "What it does"),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","What it does"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
                        "RRRocket 3D simulates low-power model rocket flights in three dimensions,
          accounting for aerodynamic drag, motor thrust curves, wind weathercocking,
@@ -974,8 +948,7 @@ ui <- tagList(
          A Monte Carlo engine propagates uncertainty in wind, ejection delay,
          and build tolerances to produce a probabilistic landing footprint."),
                      br(),
-                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
-                        "Physics"),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Physics"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
                        "Aerodynamics use the extended Barrowman equations with a body-lift correction term.
          Drag is corrected for Mach number using a Prandtl-Glauert factor below Mach 0.8
@@ -983,8 +956,7 @@ ui <- tagList(
          International Standard Atmosphere model. Wind turbulence is modeled with
          an Ornstein-Uhlenbeck process driven by Weibull-distributed gust amplitudes."),
                      br(),
-                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
-                        "Monte Carlo"),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Monte Carlo"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
                        "Each Monte Carlo run perturbs wind speed, wind direction, ejection delay,
          drag coefficient, dry mass, and propellant mass by user-specified standard
@@ -992,28 +964,40 @@ ui <- tagList(
          against a user-drawn safe zone polygon. The 95th percentile drift radius
          is the recommended metric for NAR/Tripoli range safety submissions."),
                      br(),
-                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;",
-                        "Engine data"),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Engine data"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
                        "Thrust curves use the standard RASP .eng file format.
-         Built-in curves are included for common Estes A–D motors.
-         Upload any .eng file from",
-                       tags$a(href="https://www.thrustcurve.org", target="_blank",
-                              style="color:var(--c2);", "thrustcurve.org"),
+         Built-in curves are included for common Estes A-D motors. Upload any .eng file from",
+                       tags$a(href="https://www.thrustcurve.org",target="_blank",style="color:var(--c2);","thrustcurve.org"),
                        "for higher-power motors."),
                      br(),
                      tags$hr(style="border-color:#fc913a33;margin:8px 0 20px;"),
                      div(style="display:flex;gap:12px;",
-                         tags$a(href="https://github.com/tatecommission/rrrocket",
-                                target="_blank", class="btn btn-default", "GitHub"),
-                         tags$a(href="https://www.thrustcurve.org",
-                                target="_blank", class="btn btn-default", "ThrustCurve.org")
+                         tags$a(href="https://github.com/tatecommission/rrrocket",target="_blank",class="btn btn-default","GitHub"),
+                         tags$a(href="https://www.thrustcurve.org",target="_blank",class="btn btn-default","ThrustCurve.org")
                      )
                  )
              )
+    ),
+    
+    nav_spacer(),
+    nav_item(
+      tags$a(
+        href="https://github.com/tatecommission/rrrocket",
+        target="_blank",
+        style=paste0(
+          "font-size:0.65rem;font-weight:700;letter-spacing:1px;",
+          "text-transform:uppercase;color:#eae374;text-decoration:none;",
+          "border:1px solid #fc913a55;border-radius:5px;padding:4px 10px;",
+          "background:rgba(252,145,58,0.1);",
+          "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset,0 2px 5px rgba(0,0,0,0.4);",
+          "display:inline-block;"
+        ),
+        "GitHub ↗"
+      )
     )
-  )           
-)             
+  )
+)
 
 theme_plot <- function() {
   theme_minimal(base_size=11) + theme(
@@ -1029,91 +1013,82 @@ theme_plot <- function() {
 }
 
 server <- function(input, output, session) {
-  
   use_metric <- reactiveVal(TRUE)
   observeEvent(input$units, { use_metric(input$units == "metric") }, ignoreInit=TRUE)
-
-  # for conditional panel above
-  output$has_results <- reactive({ !is.null(results()) })
+  
+  run_history   <- reactiveVal(list())
+  results_store <- reactiveVal(NULL)
+  mc_store      <- reactiveVal(NULL)
+  landing_pct_val <- reactiveVal(NULL)
+  
+  output$has_results <- reactive({ !is.null(results_store()) })
   outputOptions(output, "has_results", suspendWhenHidden=FALSE)
-
-  output$has_mc <- reactive({ !is.null(monte_carlo()) })
+  output$has_mc <- reactive({ !is.null(mc_store()) })
   outputOptions(output, "has_mc", suspendWhenHidden=FALSE)
   
-  # SI value stores — these are what the model always reads
   si <- list(
-    dry_mass         = reactiveVal(0.090),
-    diameter         = reactiveVal(0.024),
-    body_length      = reactiveVal(0.300),
-    cg_measured      = reactiveVal(0.220),
-    nose_length      = reactiveVal(0.070),
-    fin_root         = reactiveVal(0.050),
-    fin_tip          = reactiveVal(0.025),
-    fin_span         = reactiveVal(0.030),
-    fin_sweep        = reactiveVal(0.020),
-    parachute_diam   = reactiveVal(0.305),
-    rail_length      = reactiveVal(0.900),
-    wind_speed       = reactiveVal(3.000)
+    dry_mass       = reactiveVal(0.090),
+    diameter       = reactiveVal(0.024),
+    body_length    = reactiveVal(0.300),
+    cg_measured    = reactiveVal(0.220),
+    nose_length    = reactiveVal(0.070),
+    fin_root       = reactiveVal(0.050),
+    fin_tip        = reactiveVal(0.025),
+    fin_span       = reactiveVal(0.030),
+    fin_sweep      = reactiveVal(0.020),
+    parachute_diam = reactiveVal(0.305),
+    rail_length    = reactiveVal(0.900),
+    wind_speed     = reactiveVal(3.000)
   )
   
-  # For each length input, update SI store when value or unit changes
-  # and update displayed number when unit changes without changing SI
   make_length_observer <- function(id, store) {
     prev_unit <- reactiveVal(NULL)
-    
-    observeEvent(input[[paste0(id, "_unit")]], {
-      pu <- prev_unit()
-      nu <- input[[paste0(id, "_unit")]]
+    observeEvent(input[[paste0(id,"_unit")]], {
+      pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
       if (!is.null(pu) && isTruthy(input[[id]])) {
-        # Unit changed — convert display value, keep SI unchanged
-        si_val <- to_meters(input[[id]], pu)
-        store(si_val)
-        updateNumericInput(session, id, value = round(from_meters(si_val, nu), 4))
+        si_val <- to_meters(input[[id]], pu); store(si_val)
+        updateNumericInput(session, id, value=round(from_meters(si_val, nu), 4))
       }
       prev_unit(nu)
-    }, ignoreInit = FALSE)
-    
+    }, ignoreInit=FALSE)
     observeEvent(input[[id]], {
-      u <- input[[paste0(id, "_unit")]]
-      if (isTruthy(u) && isTruthy(input[[id]])) {
-        store(to_meters(input[[id]], u))
-      }
-    }, ignoreInit = TRUE)
+      u <- input[[paste0(id,"_unit")]]
+      if (isTruthy(u) && isTruthy(input[[id]])) store(to_meters(input[[id]], u))
+    }, ignoreInit=TRUE)
   }
   
   make_mass_observer <- function(id, store) {
     prev_unit <- reactiveVal(NULL)
-    observeEvent(input[[paste0(id, "_unit")]], {
-      pu <- prev_unit(); nu <- input[[paste0(id, "_unit")]]
+    observeEvent(input[[paste0(id,"_unit")]], {
+      pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
       if (!is.null(pu) && isTruthy(input[[id]])) {
         si_val <- to_kg(input[[id]], pu); store(si_val)
-        updateNumericInput(session, id, value = round(from_kg(si_val, nu), 4))
+        updateNumericInput(session, id, value=round(from_kg(si_val, nu), 4))
       }
       prev_unit(nu)
-    }, ignoreInit = FALSE)
+    }, ignoreInit=FALSE)
     observeEvent(input[[id]], {
-      u <- input[[paste0(id, "_unit")]]
+      u <- input[[paste0(id,"_unit")]]
       if (isTruthy(u) && isTruthy(input[[id]])) store(to_kg(input[[id]], u))
-    }, ignoreInit = TRUE)
+    }, ignoreInit=TRUE)
   }
   
   make_speed_observer <- function(id, store) {
     prev_unit <- reactiveVal(NULL)
-    observeEvent(input[[paste0(id, "_unit")]], {
-      pu <- prev_unit(); nu <- input[[paste0(id, "_unit")]]
+    observeEvent(input[[paste0(id,"_unit")]], {
+      pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
       if (!is.null(pu) && isTruthy(input[[id]])) {
         si_val <- to_ms(input[[id]], pu); store(si_val)
-        updateNumericInput(session, id, value = round(from_ms(si_val, nu), 4))
+        updateNumericInput(session, id, value=round(from_ms(si_val, nu), 4))
       }
       prev_unit(nu)
-    }, ignoreInit = FALSE)
+    }, ignoreInit=FALSE)
     observeEvent(input[[id]], {
-      u <- input[[paste0(id, "_unit")]]
+      u <- input[[paste0(id,"_unit")]]
       if (isTruthy(u) && isTruthy(input[[id]])) store(to_ms(input[[id]], u))
-    }, ignoreInit = TRUE)
+    }, ignoreInit=TRUE)
   }
   
-  # Wire all inputs to their SI stores
   make_mass_observer(  "dry_mass_val",       si$dry_mass)
   make_length_observer("diameter",           si$diameter)
   make_length_observer("body_length",        si$body_length)
@@ -1138,150 +1113,190 @@ server <- function(input, output, session) {
   })
   
   aero_reactive <- reactive({
-    if(!all(sapply(list(input$nose_type, input$fin_count), isTruthy))) return(NULL)
-    if(!all(sapply(list(si$nose_length(), si$body_length(), si$diameter(),
-                        si$fin_root(), si$fin_tip(), si$fin_span(),
-                        si$fin_sweep(), si$cg_measured()), function(x) isTruthy(x) && x > 0))) return(NULL)
+    if (!all(sapply(list(input$nose_type, input$fin_count), isTruthy))) return(NULL)
+    if (!all(sapply(list(si$nose_length(), si$body_length(), si$diameter(),
+                         si$fin_root(), si$fin_tip(), si$fin_span(),
+                         si$fin_sweep(), si$cg_measured()),
+                    function(x) isTruthy(x) && x > 0))) return(NULL)
     tryCatch(
       compute_aero(input$nose_type,
-                   si$nose_length(), si$body_length(),
-                   si$diameter(),    input$fin_count,
-                   si$fin_root(),    si$fin_tip(),
-                   si$fin_span(),    si$fin_sweep(),
-                   si$cg_measured()),
-      error = function(e) NULL)
+                   si$nose_length(), si$body_length(), si$diameter(), input$fin_count,
+                   si$fin_root(), si$fin_tip(), si$fin_span(), si$fin_sweep(), si$cg_measured()),
+      error=function(e) NULL)
   })
   
   aero_loaded <- reactive({
-    aero <- aero_reactive()
-    if (is.null(aero)) return(NULL)
-    td <- motor_data()
-    if (is.null(td)) return(c(aero, list(stability_margin_loaded = aero$stability_margin,
-                                         cg_loaded = si$cg_measured())))
-    prop_mass <- td$prop_mass
-    dry_mass  <- si$dry_mass()
-    cg_dry    <- si$cg_measured()
-    cg_motor  <- si$nose_length() + si$body_length() - td$motor_length_m / 2
-    cg_loaded <- (dry_mass * cg_dry + prop_mass * cg_motor) / (dry_mass + prop_mass)
-    sm_loaded <- (aero$CP - cg_loaded) / si$diameter()
-    c(aero, list(stability_margin_loaded = sm_loaded, cg_loaded = cg_loaded))
+    aero <- aero_reactive(); if (is.null(aero)) return(NULL)
+    td   <- motor_data()
+    if (is.null(td)) return(c(aero, list(stability_margin_loaded=aero$stability_margin,
+                                         cg_loaded=si$cg_measured())))
+    cg_motor  <- si$nose_length() + si$body_length() - td$motor_length_m/2
+    cg_loaded <- (si$dry_mass()*si$cg_measured() + td$prop_mass*cg_motor) /
+      (si$dry_mass() + td$prop_mass)
+    c(aero, list(stability_margin_loaded=(aero$CP-cg_loaded)/si$diameter(),
+                 cg_loaded=cg_loaded))
   })
-  
   
   output$stability_indicator <- renderUI({
-    al <- aero_loaded()
-    if (is.null(al)) return(NULL)
-    sm   <- al$stability_margin_loaded
-    fmt <- function(m) sprintf("%.1f mm  /  %.2f in", m * 1000, m * 39.3701)
-    cls  <- if (sm < 0.5) "stab-red" else if (sm < 1.0) "stab-yellow" else if (sm <= 3.0) "stab-green" else "stab-yellow"
-    lbl  <- if (sm < 0.5) "UNSTABLE" else if (sm < 1.0) "MARGINAL" else if (sm <= 3.0) "STABLE" else "OVERSTABLE"
-    hint <- if (sm < 0.5) "Unstable. Move CG forward or increase fin size." else
-      if (sm > 3.0) "Overstable. Risk of weathercocking." else ""
-    div(class = paste("stab-box", cls),
-        tags$b(sprintf("%s — %.2f cal", lbl, sm)),
-        tags$br(),
-        sprintf("CP: %s       CG: %s", fmt(al$CP), fmt(al$cg_loaded)),
-        tags$br(),
+    al <- aero_loaded(); if (is.null(al)) return(NULL)
+    sm  <- al$stability_margin_loaded
+    fmt <- function(m) sprintf("%.1f mm  /  %.2f in", m*1000, m*39.3701)
+    cls <- if (sm<0.5) "stab-red" else if (sm<1.0) "stab-yellow" else if (sm<=3.0) "stab-green" else "stab-yellow"
+    lbl <- if (sm<0.5) "UNSTABLE" else if (sm<1.0) "MARGINAL" else if (sm<=3.0) "STABLE" else "OVERSTABLE"
+    hint <- if (sm<0.5) "Unstable. Move CG forward or increase fin size." else
+      if (sm>3.0) "Overstable. Risk of weathercocking." else ""
+    div(class=paste("stab-box", cls),
+        tags$b(sprintf("%s — %.2f cal", lbl, sm)), tags$br(),
+        sprintf("CP: %s", fmt(al$CP)), tags$br(),
+        sprintf("CG: %s", fmt(al$cg_loaded)), tags$br(),
         if (!is.null(motor_data()))
           sprintf("Stability at burnout: %.2f cal", al$stability_margin)
-        else
-          tags$span(style="color:var(--dim);", "Load an engine to see loaded CG"),
-        if (nchar(hint) > 0) tagList(tags$br(), tags$span(hint)) else NULL
-    )
+        else tags$span(style="color:var(--dim);", "Load an engine to see loaded CG"),
+        if (nchar(hint)>0) tagList(tags$br(), tags$span(hint)) else NULL)
   })
   
-  thrust_data <- reactive({ md<-motor_data(); if(is.null(md)) NULL else md$thrust_curve })
-  
   output$thrust_curve_plot <- renderPlot({
-    tc <- thrust_data()
-    if(is.null(tc)||nrow(tc)==0) return(
+    tc <- motor_data()$thrust_curve
+    if (is.null(tc)||nrow(tc)==0) return(
       ggplot()+annotate("text",x=0.5,y=0.5,label="Select or upload an engine",
                         color="#6b7280",size=4)+theme_plot()+
         theme(axis.text=element_blank(),axis.title=element_blank(),panel.grid=element_blank()))
     tf <- approxfun(tc$time,tc$thrust,yleft=0,yright=0)
     ti <- integrate(tf,min(tc$time),max(tc$time))$value; mt <- max(tc$thrust)
-    tc2 <- tc; if(!use_metric()) tc2$thrust <- tc2$thrust*N_to_lbf
-    ylab  <- if(use_metric())"thrust (N)"else"thrust (lbf)"
-    t_ann <- if(use_metric()) sprintf("Total: %.2f Ns",ti) else sprintf("Total: %.2f lbf*s",ti*N_to_lbf)
-    p_ann <- if(use_metric()) sprintf("Peak:  %.2f N",mt)  else sprintf("Peak:  %.2f lbf",mt*N_to_lbf)
+    tc2 <- tc; if (!use_metric()) tc2$thrust <- tc2$thrust*N_to_lbf
+    ylab  <- if (use_metric()) "thrust (N)" else "thrust (lbf)"
+    t_ann <- if (use_metric()) sprintf("Total: %.2f Ns",ti) else sprintf("Total: %.2f lbf*s",ti*N_to_lbf)
+    p_ann <- if (use_metric()) sprintf("Peak:  %.2f N",mt)  else sprintf("Peak:  %.2f lbf",mt*N_to_lbf)
     ggplot(tc2,aes(time,thrust))+geom_area(fill="#1a56db",alpha=0.08)+
       geom_line(color="#1a56db",linewidth=1)+geom_hline(yintercept=0,color="#e8eaf0")+
-      annotate("text",x=max(tc2$time),y=max(tc2$thrust),label=t_ann,hjust=1,vjust=1.3,
-               size=3.5,fontface="bold",color="#111928")+
-      annotate("text",x=max(tc2$time),y=max(tc2$thrust)*0.87,label=p_ann,hjust=1,vjust=1.3,
-               size=3.5,color="#6b7280")+
+      annotate("text",x=max(tc2$time),y=max(tc2$thrust),label=t_ann,hjust=1,vjust=1.3,size=3.5,fontface="bold",color="#111928")+
+      annotate("text",x=max(tc2$time),y=max(tc2$thrust)*0.87,label=p_ann,hjust=1,vjust=1.3,size=3.5,color="#6b7280")+
       scale_y_continuous(limits=c(0,max(tc2$thrust)*1.18))+
       labs(x="time (s)",y=ylab,title="Engine thrust vs. time")+theme_plot()
   })
   
-  run_history <- reactiveVal(list())
-  
-  results <- eventReactive(input$run, {
+  # ── SIMULATE ──────────────────────────────────────────────────────────────
+  observeEvent(input$run, {
     aero   <- aero_reactive()
     parsed <- motor_data()
-    validate(need(!is.null(aero),  "Complete rocket geometry on the Setup tab."))
-    validate(need(!is.null(parsed),"Select an engine on the Setup tab."))
-    tryCatch({
-      sim <- flight_simulation_3d(
+    if (is.null(aero))   { showNotification("Complete rocket geometry on Setup tab", type="warning"); return() }
+    if (is.null(parsed)) { showNotification("Select an engine on Setup tab",         type="warning"); return() }
+    sim <- tryCatch(
+      flight_simulation_3d(
         parsed$thrust_curve, parsed$prop_mass, si$dry_mass(),
-        si$diameter(), si$parachute_diam(), input$parachute_delay,
+        si$diameter(), max(si$parachute_diam(),0.05), input$parachute_delay,
         aero$Cd, aero$CNa_total, aero$CP, input$precision,
         si$wind_speed(), input$wind_dir,
         si$cg_measured(), si$nose_length(), si$body_length(),
         parsed$motor_length_m, si$rail_length(),
         input$launch_bearing, input$launch_angle,
-        landing_only = FALSE)
-      res <- list(sim=sim,aero=aero,
-                  label=paste0("Run ",length(run_history())+1),
-                  motor=if(isTruthy(input$engine_choice)&&input$engine_choice!="") input$engine_choice else "custom")
-      hist <- run_history(); hist[[length(hist)+1]] <- res; run_history(hist)
-      res
-    },error=function(e){showNotification(paste("Error:",e$message),type="error",duration=8);NULL})
+        landing_only=FALSE),
+      error=function(e) { showNotification(paste("Sim error:",e$message),type="error"); NULL })
+    if (is.null(sim)) return()
+    res  <- list(sim=sim, aero=aero,
+                 label=paste0("Run ",length(run_history())+1),
+                 motor=if(isTruthy(input$engine_choice)&&input$engine_choice!="") input$engine_choice else "custom")
+    hist <- run_history(); hist[[length(hist)+1]] <- res; run_history(hist)
+    results_store(res)
   })
   
+  # ── MONTE CARLO ───────────────────────────────────────────────────────────
+  observeEvent(input$run_mc, {
+    aero   <- aero_reactive()
+    parsed <- motor_data()
+    if (is.null(aero))   { showNotification("Complete rocket geometry first", type="warning"); return() }
+    if (is.null(parsed)) { showNotification("Select an engine first",         type="warning"); return() }
+    n        <- input$mc_runs
+    landings <- vector("list", n)
+    withProgress(message="Monte Carlo", value=0, {
+      for (i in seq_len(n)) {
+        incProgress(1/n, detail=sprintf("Run %d / %d", i, n))
+        sim <- tryCatch(
+          flight_simulation_3d(
+            parsed$thrust_curve,
+            parsed$prop_mass * rnorm(1,1,0.01*input$prop_mass_std_dev),
+            si$dry_mass()    * rnorm(1,1,0.01*input$dry_mass_std_dev),
+            si$diameter(), max(si$parachute_diam(),0.05),
+            max(0, rnorm(1,input$parachute_delay,input$chute_delay_std_dev)),
+            aero$Cd * rnorm(1,1,0.01*input$cd_std_dev),
+            aero$CNa_total, aero$CP, input$montecarlo_precision,
+            max(0, rnorm(1,si$wind_speed(),0.01*si$wind_speed()*input$wind_speed_std_dev)),
+            rnorm(1,input$wind_dir,input$wind_dir_std_dev),
+            si$cg_measured(), si$nose_length(), si$body_length(),
+            parsed$motor_length_m, si$rail_length(),
+            input$launch_bearing,
+            max(0, rnorm(1,input$launch_angle,input$launch_angle_std_dev)),
+            landing_only=TRUE),
+          error=function(e) NULL)
+        landings[[i]] <- if (!is.null(sim)) data.frame(x=sim$x,y=sim$y) else data.frame(x=0,y=0)
+      }
+    })
+    mc_store(do.call(rbind, landings))
+  })
+  
+  # ── OUTPUTS ───────────────────────────────────────────────────────────────
   output$run_history_table <- renderUI({
-    hist <- run_history()
-    if(length(hist)==0) return(p("No runs yet."))
-    rows <- lapply(rev(seq_along(hist)),function(i) {
+    hist <- run_history(); if (length(hist)==0) return(p("No runs yet."))
+    sc <- if(use_metric()) 1 else m_to_ft; u <- if(use_metric()) "m" else "ft"
+    rows <- lapply(rev(seq_along(hist)), function(i) {
       r <- hist[[i]]; s <- r$sim
-      sc <- if(use_metric()) 1 else m_to_ft; u <- if(use_metric())"m"else"ft"
-      tags$tr(tags$td(r$label),tags$td(r$motor),
+      tags$tr(tags$td(r$label), tags$td(r$motor),
               tags$td(sprintf("%.0f %s",max(s$altitude)*sc,u)),
               tags$td(sprintf("%.1f s",max(s$time))),
               tags$td(sprintf("%.2f cal",r$aero$stability_margin)))
     })
     tags$table(class="run-table",
-               tags$thead(tags$tr(tags$th("Run"),tags$th("Motor"),tags$th("Apogee"),
-                                  tags$th("Flight time"),tags$th("Stability"))),
+               tags$thead(tags$tr(tags$th("Run"),tags$th("Motor"),
+                                  tags$th("Apogee"),tags$th("Time"),tags$th("Stab."))),
                tags$tbody(rows))
   })
   
+  output$summary <- renderPrint({
+    res <- results_store(); req(!is.null(res))
+    r <- res$sim; ae <- res$aero
+    sc <- if(use_metric()) 1 else m_to_ft
+    u  <- if(use_metric()) "m" else "ft"
+    us <- if(use_metric()) "m/s" else "ft/s"
+    cat(sprintf("apogee             %d %s\n",       round(max(r$altitude)*sc), u))
+    cat(sprintf("max velocity       %.1f %s\n",     max(r$velocity)*sc, us))
+    rail_v <- attr(r,"rail_exit_ms")
+    if (!is.null(rail_v)&&!is.na(rail_v)) {
+      flag <- if(rail_v*sc < 49) " *** LOW" else ""
+      cat(sprintf("rail exit speed    %.1f %s%s\n", rail_v*sc, us, flag))
+    }
+    cat(sprintf("max Mach           %.3f\n",   max(r$mach)))
+    cat(sprintf("time to apogee     %.2f s\n", r$time[which.max(r$altitude)]))
+    cat(sprintf("total flight time  %.2f s\n", max(r$time)))
+    cat(sprintf("stability (loaded) %.2f cal\n",round(min(r$stability_margin),2)))
+    cat(sprintf("Cd                 %.4f\n",   ae$Cd))
+  })
+  
   output$altitude_plot <- renderPlot({
-    req(results()); r <- results()$sim
+    res <- results_store(); req(!is.null(res)); r <- res$sim
     alt  <- if(use_metric()) r$altitude else r$altitude*m_to_ft
-    ylab <- if(use_metric())"altitude (m)"else"altitude (ft)"
+    ylab <- if(use_metric()) "altitude (m)" else "altitude (ft)"
     ggplot(data.frame(t=r$time,alt=alt),aes(t,alt))+
-      geom_area(fill="#fc913a", alpha=0.15)+geom_line(color="#fc913a", linewidth=1)+
+      geom_area(fill="#fc913a",alpha=0.15)+geom_line(color="#fc913a",linewidth=1)+
       geom_hline(yintercept=0,color="#e8eaf0")+
       labs(x="time (s)",y=ylab,title="Altitude")+theme_plot()
   })
   
   output$velocity_plot <- renderPlot({
-    req(results()); r <- results()$sim
+    res <- results_store(); req(!is.null(res)); r <- res$sim
     vz   <- if(use_metric()) r$vz else r$vz*m_to_ft
-    ylab <- if(use_metric())"vertical velocity (m/s)"else"vertical velocity (ft/s)"
+    ylab <- if(use_metric()) "vertical velocity (m/s)" else "vertical velocity (ft/s)"
     ggplot(data.frame(t=r$time,vz=vz),aes(t,vz))+
-      geom_line(color="#f9d62e", linewidth=1)+
-      geom_hline(yintercept=0, color="#fc913a44", linetype="dashed")+
+      geom_line(color="#f9d62e",linewidth=1)+
+      geom_hline(yintercept=0,color="#fc913a44",linetype="dashed")+
       labs(x="time (s)",y=ylab,title="Vertical velocity")+theme_plot()
   })
   
   output$track_3d <- renderPlotly({
-    req(results()); r <- results()$sim
+    res <- results_store(); req(!is.null(res)); r <- res$sim
     sc <- if(use_metric()) 1 else m_to_ft
-    xl <- if(use_metric())"East (m)"else"East (ft)"
-    yl <- if(use_metric())"North (m)"else"North (ft)"
-    zl <- if(use_metric())"Altitude (m)"else"Altitude (ft)"
+    xl <- if(use_metric()) "East (m)"     else "East (ft)"
+    yl <- if(use_metric()) "North (m)"    else "North (ft)"
+    zl <- if(use_metric()) "Altitude (m)" else "Altitude (ft)"
     plot_ly(r,x=~x*sc,y=~y*sc,z=~altitude*sc,type="scatter3d",mode="lines",
             line=list(color=~altitude*sc,colorscale=list(c(0,"#1a56db"),c(1,"#60a5fa")),width=3))|>
       add_trace(x=tail(r$x,1)*sc,y=tail(r$y,1)*sc,z=0,type="scatter3d",mode="markers",
@@ -1293,138 +1308,24 @@ server <- function(input, output, session) {
                         zaxis=list(title=zl,gridcolor="#d0d5de")))
   })
   
-  output$summary <- renderPrint({
-    req(results()); r <- results()$sim; ae <- results()$aero
-    sc <- if(use_metric()) 1 else m_to_ft
-    u  <- if(use_metric())"m"else"ft"; us <- if(use_metric())"m/s"else"ft/s"
-    cat("apogee            ",round(max(r$altitude)*sc),u,"\n")
-    cat("max velocity      ",round(max(r$velocity)*sc,1),us,"\n")
-    rail_v <- attr(r,"rail_exit_ms")
-    if(!is.null(rail_v)&&!is.na(rail_v)) {
-      flag <- if(rail_v<15)" *** LOW - risk of instability"else""
-      cat(sprintf("rail exit speed   %.1f %s%s\n",rail_v*sc,us,flag))
-    }
-    cat("max Mach number ",round(max(r$mach),3),"\n")
-    cat("time at apogee ",round(r$time[which.max(r$altitude)],2),"s\n")
-    cat("total flight time ",round(max(r$time),2),"s\n")
-    cat("static stability when full ",round(ae$stability_margin,2),"calibers\n")
-    cat("stability margin when loaded ",round(min(r$stability_margin),2),"cal\n")
-    cat("Cd (subsonic) ",round(ae$Cd,4),"\n")
-    cat("  nose",round(ae$Cd_nose,4)," fins",round(ae$Cd_fins,4),
-        " body",round(ae$Cd_body,4)," below engine",round(ae$Cd_base,4),"\n")
-  })
-  
-  output$landing_summary <- renderPrint({
-    req(results()); r <- results()$sim
-    sc <- if(use_metric()) 1 else m_to_ft; u <- if(use_metric())"m"else"ft"
-    lx <- tail(r$x,1)*sc; ly <- tail(r$y,1)*sc
-    cat(sprintf("East drift   %+.1f %s\n",lx,u))
-    cat(sprintf("North drift  %+.1f %s\n",ly,u))
-    cat(sprintf("Total drift  %.1f %s\n",sqrt(lx^2+ly^2),u))
-  })
-  
-  landing_pct_val   <- reactiveVal(NULL)
-  mc_landings_store <- reactiveVal(NULL)
-  
-  monte_carlo <- eventReactive(input$run_mc, {
-    aero   <- aero_reactive()
-    parsed <- motor_data()
-    validate(need(!is.null(aero),   "Complete rocket geometry first."))
-    validate(need(!is.null(parsed), "Select an engine first."))
-    n        <- input$mc_runs
-    landings <- vector("list", n)
-    
-    result <- tryCatch({
-      withProgress(message="Monte Carlo", value=0, {
-        for (i in seq_len(n)) {
-          incProgress(1/n, detail=sprintf("Run %d / %d", i, n))
-          dm_kg  <- si$dry_mass()      * rnorm(1, 1, 0.01 * input$dry_mass_std_dev)
-          pm_kg  <- parsed$prop_mass   * rnorm(1, 1, 0.01 * input$prop_mass_std_dev)
-          cd_var <- aero$Cd            * rnorm(1, 1, 0.01 * input$cd_std_dev)
-          
-          sim <- tryCatch(
-            flight_simulation_3d(
-              parsed$thrust_curve, pm_kg, dm_kg,
-              si$diameter(), si$parachute_diam(),
-              max(0, rnorm(1, input$parachute_delay, input$chute_delay_std_dev)),
-              cd_var, aero$CNa_total, aero$CP, input$montecarlo_precision,
-              max(0, rnorm(1, si$wind_speed(), 0.01 * si$wind_speed() * input$wind_speed_std_dev)),
-              rnorm(1, input$wind_dir, input$wind_dir_std_dev),
-              si$cg_measured(), si$nose_length(), si$body_length(),
-              parsed$motor_length_m, si$rail_length(),
-              input$launch_bearing,
-              max(0, rnorm(1, input$launch_angle, input$launch_angle_std_dev)),
-              landing_only = TRUE),
-            error = function(e) NULL)
-          landings[[i]] <- if (!is.null(sim))
-            data.frame(x=sim$x, y=sim$y) 
-          else
-            data.frame(x=0, y=0)
-        }
-      })
-      landings
-    },
-    error = function(e) {
-     
-      completed <- Filter(Negate(is.null), landings)
-      if (length(completed) > 0) {
-        showNotification(sprintf("Stopped early — showing %d runs.", length(completed)), 
-                         type="warning", duration=4)
-        completed
-      } else {
-        NULL
-      }
-    })
-    
-    if (is.null(result)) return(NULL)
-    lc <- do.call(rbind, result)
-    mc_landings_store(lc)
-    lc
-  })
-  
-  eval_polygon <- function(lc, poly) {
-    req(launch_point())
-    lp <- launch_point(); lat0 <- lp$lat; lng0 <- lp$lng
-    lc$lat <- lat0+(lc$y/111320)
-    lc$lng <- lng0+(lc$x/(111320*cos(lat0*pi/180)))
-    poly_coords <- poly$geometry$coordinates[[1]]
-    poly_mat    <- do.call(rbind,lapply(poly_coords,function(p) c(p[[1]],p[[2]])))
-    if(!identical(poly_mat[1,],poly_mat[nrow(poly_mat),])) poly_mat <- rbind(poly_mat,poly_mat[1,])
-    pip <- function(px,py,pm) sapply(seq_along(px),function(k){
-      x<-px[k];y<-py[k];n<-nrow(pm);j<-n;inside<-FALSE
-      for(i in 1:n){xi<-pm[i,1];yi<-pm[i,2];xj<-pm[j,1];yj<-pm[j,2]
-      if(((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi)) inside<-!inside;j<-i}
-      inside})
-    inside <- pip(lc$lng,lc$lat,poly_mat)
-    pct    <- mean(inside)*100
-    landing_pct_val(pct)
-    lc$color <- ifelse(inside,"#0e9f6e","#e02424")
-    icon <- makeIcon(iconUrl="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
-                     iconWidth=25,iconHeight=41,iconAnchorX=12,iconAnchorY=41)
-    leafletProxy("map")|>clearMarkers()|>clearGroup("launch")|>
-      addCircleMarkers(lng=lc$lng,lat=lc$lat,radius=4,color=lc$color,fillOpacity=0.7,stroke=FALSE)|>
-      addMarkers(lng=lng0,lat=lat0,icon=icon,label="Launch pad",group="launch")|>
-      addPopups(lng=lng0,lat=lat0,popup=sprintf("%.1f%% land inside safe zone",pct))
-  }
-  
-  observeEvent(list(monte_carlo(),drawn_polygon()), {
-    lc <- mc_landings_store(); poly <- drawn_polygon()
-    if(is.null(lc)||is.null(poly)) return()
-    eval_polygon(lc,poly)
-  })
-  
   output$landing_pct <- renderPrint({
-    req(monte_carlo())
-    lc    <- monte_carlo()
-    sc    <- if(use_metric()) 1 else m_to_ft; u <- if(use_metric())"m"else"ft"
+    lc <- mc_store(); req(!is.null(lc))
+    sc <- if(use_metric()) 1 else m_to_ft; u <- if(use_metric()) "m" else "ft"
     drift <- sqrt(lc$x^2+lc$y^2)*sc
-    cat(sprintf("95th pct distance from pad: %.0f %s\n",quantile(drift,0.95),u))
-    cat(sprintf("Max distance from pad:       %.0f %s\n",max(drift),u))
-    if(!is.null(landing_pct_val())) cat(sprintf("%.1f%% of rockets land in the polygon\n",landing_pct_val()))
+    cat(sprintf("95th pct distance from pad: %.0f %s\n", quantile(drift,0.95), u))
+    cat(sprintf("Max distance from pad:       %.0f %s\n", max(drift), u))
+    if (!is.null(landing_pct_val()))
+      cat(sprintf("%.1f%% of rockets land in the polygon\n", landing_pct_val()))
   })
   
-  launch_point <- reactiveVal(list(lat=38.89,lng=-77.03))
-  observeEvent(input$map_click,{launch_point(list(lat=input$map_click$lat,lng=input$map_click$lng))})
+  # ── MAP ───────────────────────────────────────────────────────────────────
+  launch_point <- reactiveVal(list(lat=38.89, lng=-77.03))
+  observeEvent(input$map_click, {
+    launch_point(list(lat=input$map_click$lat, lng=input$map_click$lng))
+  })
+  
+  drawn_polygon <- reactiveVal(NULL)
+  observeEvent(input$map_draw_new_feature, { drawn_polygon(input$map_draw_new_feature) })
   
   rocket_icon <- makeIcon(
     iconUrl="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
@@ -1445,8 +1346,31 @@ server <- function(input, output, session) {
       addMarkers(lng=lp$lng,lat=lp$lat,icon=rocket_icon,label="Launch pad",group="launch")
   })
   
-  drawn_polygon <- reactiveVal(NULL)
-  observeEvent(input$map_draw_new_feature,{drawn_polygon(input$map_draw_new_feature)})
+  observeEvent(list(mc_store(), drawn_polygon()), {
+    lc <- mc_store(); poly <- drawn_polygon()
+    if (is.null(lc)||is.null(poly)) return()
+    lp <- launch_point(); lat0 <- lp$lat; lng0 <- lp$lng
+    lc$lat <- lat0+(lc$y/111320)
+    lc$lng <- lng0+(lc$x/(111320*cos(lat0*pi/180)))
+    poly_coords <- poly$geometry$coordinates[[1]]
+    poly_mat <- do.call(rbind,lapply(poly_coords,function(p) c(p[[1]],p[[2]])))
+    if (!identical(poly_mat[1,],poly_mat[nrow(poly_mat),])) poly_mat <- rbind(poly_mat,poly_mat[1,])
+    pip <- function(px,py,pm) sapply(seq_along(px),function(k){
+      x<-px[k];y<-py[k];n<-nrow(pm);j<-n;inside<-FALSE
+      for(i in 1:n){xi<-pm[i,1];yi<-pm[i,2];xj<-pm[j,1];yj<-pm[j,2]
+      if(((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi)) inside<-!inside;j<-i}
+      inside})
+    inside <- pip(lc$lng,lc$lat,poly_mat)
+    pct    <- mean(inside)*100
+    landing_pct_val(pct)
+    lc$color <- ifelse(inside,"#0e9f6e","#e02424")
+    icon <- makeIcon(iconUrl="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
+                     iconWidth=25,iconHeight=41,iconAnchorX=12,iconAnchorY=41)
+    leafletProxy("map")|>clearMarkers()|>clearGroup("launch")|>
+      addCircleMarkers(lng=lc$lng,lat=lc$lat,radius=4,color=lc$color,fillOpacity=0.7,stroke=FALSE)|>
+      addMarkers(lng=lng0,lat=lat0,icon=icon,label="Launch pad",group="launch")|>
+      addPopups(lng=lng0,lat=lat0,popup=sprintf("%.1f%% land inside safe zone",pct))
+  })
 }
 
-shinyApp(ui=ui,server=server)
+shinyApp(ui=ui, server=server)
