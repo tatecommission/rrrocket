@@ -11,6 +11,76 @@ gamma_a  <- 1.4
 m_to_ft  <- 3.28084
 N_to_lbf <- 0.224809
 
+unit_choices_length <- c("mm", "cm", "in", "ft", "m")
+unit_choices_mass   <- c("g", "oz", "kg", "lb")
+unit_choices_speed  <- c("m/s", "mph", "km/h", "knots")
+
+to_meters <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit,
+         "mm"    = val / 1000,
+         "cm"    = val / 100,
+         "in"    = val * 0.0254,
+         "ft"    = val * 0.3048,
+         "m"     = val,
+         val / 1000
+  )
+}
+
+to_kg <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit,
+         "g"  = val / 1000,
+         "oz" = val * 0.0283495,
+         "kg" = val,
+         "lb" = val * 0.453592,
+         val / 1000
+  )
+}
+
+to_ms <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit,
+         "m/s"   = val,
+         "mph"   = val * 0.44704,
+         "km/h"  = val / 3.6,
+         "knots" = val * 0.514444,
+         val
+  )
+}
+
+# Convert SI value back to display unit (for unit switching)
+from_meters <- function(si_val, unit) {
+  switch(unit,
+         "mm" = si_val * 1000,
+         "cm" = si_val * 100,
+         "in" = si_val / 0.0254,
+         "ft" = si_val / 0.3048,
+         "m"  = si_val,
+         si_val * 1000
+  )
+}
+
+from_kg <- function(si_val, unit) {
+  switch(unit,
+         "g"  = si_val * 1000,
+         "oz" = si_val / 0.0283495,
+         "kg" = si_val,
+         "lb" = si_val / 0.453592,
+         si_val * 1000
+  )
+}
+
+from_ms <- function(si_val, unit) {
+  switch(unit,
+         "m/s"   = si_val,
+         "mph"   = si_val / 0.44704,
+         "km/h"  = si_val * 3.6,
+         "knots" = si_val / 0.514444,
+         si_val
+  )
+}
+
 isa_fast <- function(z) {
   z <- max(z, 0)
   if (z <= 11000) {
@@ -79,6 +149,7 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
                                  motor_length_m, rail_length_m,
                                  launch_bearing_deg, launch_angle_deg,
                                  landing_only = FALSE) {
+
   if (is.null(thrust_curve) || nrow(thrust_curve) == 0) return(NULL)
   thrust    <- approxfun(thrust_curve$time, thrust_curve$thrust, yleft=0, yright=0)
   burn_time <- max(thrust_curve$time)
@@ -574,16 +645,19 @@ pre,.shiny-verbatim-output{
 }
 "
 
-unit_toggle_ui <- function(id) {
-  div(style="margin-bottom:14px;",
-      radioButtons(id,label=NULL,choices=c("Metric"="metric","Imperial"="imperial"),
-                   selected="metric",inline=TRUE))
-}
-
-labeled_num <- function(input_id, label_id, default, min=0) {
-  div(style="margin-bottom:8px;",
-      uiOutput(label_id,inline=FALSE),
-      numericInput(input_id,label=NULL,value=default,min=min,width="100%"))
+unit_input <- function(input_id, label, default_val, default_unit, choices, width = "100%") {
+  div(style = "margin-bottom: 10px;",
+      tags$label(
+        style = "font-family:var(--sans);font-size:0.72rem;color:var(--dim);
+                 text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:3px;",
+        label
+      ),
+      div(style = "display:flex; gap:6px; align-items:center;",
+          numericInput(input_id, label = NULL, value = default_val, width = "65%"),
+          selectInput(paste0(input_id, "_unit"), label = NULL,
+                      choices = choices, selected = default_unit, width = "35%")
+      )
+  )
 }
 
 ui <- tagList(
@@ -613,45 +687,50 @@ ui <- tagList(
                      h1(class="home-title", span(id="typed-title")),
                      span(class="cursor")
                  ),
-                 p(class="home-sub","Model rocket flight simulator"),
-                 br(), unit_toggle_ui("units")
+                 p(class="home-sub","Model rocket flight simulator")
              )
     ),
     
     tabPanel("Setup",
              fluidRow(
                column(5,
-                      unit_toggle_ui("units2"),
                       navset_card_pill(
                         nav_panel("Rocket",
-                                  labeled_num("dry_mass_val","lbl_dry_mass",90),
-                                  labeled_num("diameter","lbl_diameter",24),
-                                  labeled_num("body_length","lbl_body_length",300),
-                                  labeled_num("cg_measured","lbl_cg_measured",220)),
+                                  unit_input("dry_mass_val",  "Dry mass",               90,  "g",  unit_choices_mass),
+                                  unit_input("diameter",      "Body tube diameter",      24,  "mm", unit_choices_length),
+                                  unit_input("body_length",   "Body tube length",        300, "mm", unit_choices_length),
+                                  unit_input("cg_measured",   "CG from nose tip (dry)",  220, "mm", unit_choices_length)
+                        ),
                         nav_panel("Nosecone",
-                                  selectInput("nose_type","Nosecone type",choices=c("ogive","conical","parabolic")),
-                                  labeled_num("nose_length","lbl_nose_length",70)),
+                                  selectInput("nose_type", "Nosecone type", choices = c("ogive","conical","parabolic")),
+                                  unit_input("nose_length", "Nosecone length", 70, "mm", unit_choices_length)
+                        ),
                         nav_panel("Fins",
-                                  numericInput("fin_count","Number of fins",value=3),
-                                  labeled_num("fin_root","lbl_fin_root",50),
-                                  labeled_num("fin_tip","lbl_fin_tip",25),
-                                  labeled_num("fin_span","lbl_fin_span",30),
-                                  labeled_num("fin_sweep","lbl_fin_sweep",20)),
+                                  numericInput("fin_count", "Number of fins", value = 3),
+                                  unit_input("fin_root",  "Root chord",   50, "mm", unit_choices_length),
+                                  unit_input("fin_tip",   "Tip chord",    25, "mm", unit_choices_length),
+                                  unit_input("fin_span",  "Semi-span",    30, "mm", unit_choices_length),
+                                  unit_input("fin_sweep", "Sweep length", 20, "mm", unit_choices_length)
+                        ),
                         nav_panel("Chute",
-                                  labeled_num("parachute_diameter","lbl_chute_diameter",305)),
+                                  unit_input("parachute_diameter", "Chute diameter", 305, "mm", unit_choices_length)
+                        ),
                         nav_panel("Launch",
-                                  labeled_num("rail_length","lbl_rail_length",0.9),
-                                  labeled_num("wind_speed_val","lbl_wind_speed",3),
-                                  sliderInput("wind_dir","Wind from (deg CW from N)",min=0,max=360,value=270),
-                                  numericInput("launch_angle","Launch angle from vertical (deg)",value=0,min=0,max=30),
-                                  sliderInput("launch_bearing","Launch bearing (deg CW from N)",value=0,min=0,max=360)),
+                                  unit_input("rail_length",    "Rail length",  0.9, "m",   unit_choices_length),
+                                  unit_input("wind_speed_val", "Wind speed",   3,   "m/s", unit_choices_speed),
+                                  sliderInput("wind_dir", "Wind from (deg CW from N)", min=0, max=360, value=270),
+                                  numericInput("launch_angle", "Launch angle from vertical (deg)", value=0, min=0, max=30),
+                                  sliderInput("launch_bearing", "Launch bearing (deg CW from N)", value=0, min=0, max=360)
+                        ),
                         nav_panel("Engine",
-                                  fileInput("motor_file",NULL,accept=".eng",buttonLabel="Upload .eng"),
-                                  numericInput("parachute_delay","Ejection delay (s)",value=4),
-                                  selectInput("engine_choice","Or choose an engine:",
-                                              choices=c("Select engine..."="","A8","A10","B4","B6","C6","C11","D12","E12","E16",
-                                              "G40","L2350"),
-                                              selected="B6",size=5,selectize=FALSE))),
+                                  fileInput("motor_file", NULL, accept=".eng", buttonLabel="Upload .eng"),
+                                  numericInput("parachute_delay", "Ejection delay (s)", value=4),
+                                  selectInput("engine_choice", "Or choose an engine:",
+                                              choices = c("Select engine..."="","A8","A10","B4","B6","C6","C11",
+                                                          "D12","E12","E16","G40","L2350"),
+                                              selected="B6", size=5, selectize=FALSE)
+                        )
+                      ),            
                       uiOutput("stability_indicator")),
                column(7,plotOutput("thrust_curve_plot",height="420px")))),
     
@@ -683,14 +762,19 @@ ui <- tagList(
                  sliderInput("wind_dir_std_dev",     "Wind direction sd (deg)",    value=30, min=1,  max=180),
                  sliderInput("dry_mass_std_dev",     "Dry mass sd (%)",            value=2,  min=0,  max=10),
                  sliderInput("cd_std_dev",           "Drag coefficient sd (%)",    value=10, min=0,  max=30),
-                 sliderInput("prop_mass_std_dev",    "Propellant mass sd (%)",     value=2,  min=0,  max=10)),
+                 sliderInput("prop_mass_std_dev",    "Propellant mass sd (%)",     value=2,  min=0,  max=10),
+                 sliderInput("montecarlo_precision", "Integration interval (s)", 
+                           value=0.05, min=0.005, max=0.2)),
                mainPanel(
-                 leafletOutput("map",height=600),
+                 leafletOutput("map", height=600),
                  p("Click map to set launch position"),
-                 actionButton("run_mc","Run Monte Carlo",class="btn-warning"),
-                 verbatimTextOutput("landing_pct"))))
-  )
-)
+                 actionButton("run_mc", "Run Monte Carlo", class="btn-warning"),
+                 verbatimTextOutput("landing_pct")
+               )         
+             )          
+    )         
+  )           
+)             
 
 theme_plot <- function() {
   theme_minimal(base_size=11)+theme(
@@ -703,37 +787,100 @@ theme_plot <- function() {
     axis.title       = element_text(color="#374151",size=9),
     plot.title       = element_text(color="#111928",size=11,face="bold"),
     plot.margin      = margin(8,12,8,8))
-}
+  }
 
 server <- function(input, output, session) {
   
   use_metric <- reactiveVal(TRUE)
   observeEvent(input$units,  { use_metric(input$units=="metric");  updateRadioButtons(session,"units2",selected=input$units)  },ignoreInit=TRUE)
-  observeEvent(input$units2, { use_metric(input$units2=="metric"); updateRadioButtons(session,"units", selected=input$units2) },ignoreInit=TRUE)
+
+
+  # SI value stores — these are what the model always reads
+  si <- list(
+    dry_mass         = reactiveVal(0.090),
+    diameter         = reactiveVal(0.024),
+    body_length      = reactiveVal(0.300),
+    cg_measured      = reactiveVal(0.220),
+    nose_length      = reactiveVal(0.070),
+    fin_root         = reactiveVal(0.050),
+    fin_tip          = reactiveVal(0.025),
+    fin_span         = reactiveVal(0.030),
+    fin_sweep        = reactiveVal(0.020),
+    parachute_diam   = reactiveVal(0.305),
+    rail_length      = reactiveVal(0.900),
+    wind_speed       = reactiveVal(3.000)
+  )
   
-  mk_lbl <- function(id, text, um, ui) {
-    output[[id]] <- renderUI(tags$label(
-      style="font-family:var(--sans);font-size:0.72rem;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;",
-      paste0(text," (",if(use_metric()) um else ui,")")))
+  # For each length input, update SI store when value or unit changes
+  # and update displayed number when unit changes without changing SI
+  make_length_observer <- function(id, store) {
+    prev_unit <- reactiveVal(NULL)
+    
+    observeEvent(input[[paste0(id, "_unit")]], {
+      pu <- prev_unit()
+      nu <- input[[paste0(id, "_unit")]]
+      if (!is.null(pu) && isTruthy(input[[id]])) {
+        # Unit changed — convert display value, keep SI unchanged
+        si_val <- to_meters(input[[id]], pu)
+        store(si_val)
+        updateNumericInput(session, id, value = round(from_meters(si_val, nu), 4))
+      }
+      prev_unit(nu)
+    }, ignoreInit = FALSE)
+    
+    observeEvent(input[[id]], {
+      u <- input[[paste0(id, "_unit")]]
+      if (isTruthy(u) && isTruthy(input[[id]])) {
+        store(to_meters(input[[id]], u))
+      }
+    }, ignoreInit = TRUE)
   }
-  mk_lbl("lbl_dry_mass",       "Dry mass",               "g",   "oz")
-  mk_lbl("lbl_diameter",       "Body tube diameter",     "mm",  "in")
-  mk_lbl("lbl_body_length",    "Body tube length",       "mm",  "in")
-  mk_lbl("lbl_cg_measured",    "CG from nose tip (dry)", "mm",  "in")
-  mk_lbl("lbl_nose_length",    "Nosecone length",        "mm",  "in")
-  mk_lbl("lbl_fin_root",       "Root chord",             "mm",  "in")
-  mk_lbl("lbl_fin_tip",        "Tip chord",              "mm",  "in")
-  mk_lbl("lbl_fin_span",       "Semi-span",              "mm",  "in")
-  mk_lbl("lbl_fin_sweep",      "Sweep length",           "mm",  "in")
-  mk_lbl("lbl_chute_diameter", "Chute diameter",         "mm",  "in")
-  mk_lbl("lbl_rail_length",    "Rail length",            "m",   "ft")
-  mk_lbl("lbl_wind_speed",     "Wind speed",             "m/s", "mph")
   
-  to_m   <- function(v) { if(!isTruthy(v)) return(0); if(use_metric()) v/1000 else v*0.0254 }
-  to_m_r <- function(v) { if(!isTruthy(v)) return(0); if(use_metric()) v      else v*0.3048 }
-  get_dry_mass_kg  <- function() { v<-input$dry_mass_val;       if(!isTruthy(v)) return(0.09); if(use_metric()) v/1000 else v*0.0283495 }
-  get_chute_diam_m <- function() { v<-input$parachute_diameter; if(!isTruthy(v)) return(0.30); if(use_metric()) v/1000 else v*0.0254 }
-  get_wind_ms      <- function() { v<-input$wind_speed_val;     if(!isTruthy(v)) return(3);    if(use_metric()) v      else v*0.44704 }
+  make_mass_observer <- function(id, store) {
+    prev_unit <- reactiveVal(NULL)
+    observeEvent(input[[paste0(id, "_unit")]], {
+      pu <- prev_unit(); nu <- input[[paste0(id, "_unit")]]
+      if (!is.null(pu) && isTruthy(input[[id]])) {
+        si_val <- to_kg(input[[id]], pu); store(si_val)
+        updateNumericInput(session, id, value = round(from_kg(si_val, nu), 4))
+      }
+      prev_unit(nu)
+    }, ignoreInit = FALSE)
+    observeEvent(input[[id]], {
+      u <- input[[paste0(id, "_unit")]]
+      if (isTruthy(u) && isTruthy(input[[id]])) store(to_kg(input[[id]], u))
+    }, ignoreInit = TRUE)
+  }
+  
+  make_speed_observer <- function(id, store) {
+    prev_unit <- reactiveVal(NULL)
+    observeEvent(input[[paste0(id, "_unit")]], {
+      pu <- prev_unit(); nu <- input[[paste0(id, "_unit")]]
+      if (!is.null(pu) && isTruthy(input[[id]])) {
+        si_val <- to_ms(input[[id]], pu); store(si_val)
+        updateNumericInput(session, id, value = round(from_ms(si_val, nu), 4))
+      }
+      prev_unit(nu)
+    }, ignoreInit = FALSE)
+    observeEvent(input[[id]], {
+      u <- input[[paste0(id, "_unit")]]
+      if (isTruthy(u) && isTruthy(input[[id]])) store(to_ms(input[[id]], u))
+    }, ignoreInit = TRUE)
+  }
+  
+  # Wire all inputs to their SI stores
+  make_mass_observer(  "dry_mass_val",       si$dry_mass)
+  make_length_observer("diameter",           si$diameter)
+  make_length_observer("body_length",        si$body_length)
+  make_length_observer("cg_measured",        si$cg_measured)
+  make_length_observer("nose_length",        si$nose_length)
+  make_length_observer("fin_root",           si$fin_root)
+  make_length_observer("fin_tip",            si$fin_tip)
+  make_length_observer("fin_span",           si$fin_span)
+  make_length_observer("fin_sweep",          si$fin_sweep)
+  make_length_observer("parachute_diameter", si$parachute_diam)
+  make_length_observer("rail_length",        si$rail_length)
+  make_speed_observer( "wind_speed_val",     si$wind_speed)
   
   motor_data <- reactive({
     if (!is.null(input$motor_file)) {
@@ -746,37 +893,41 @@ server <- function(input, output, session) {
   })
   
   aero_reactive <- reactive({
-    needed <- list(input$nose_type,input$nose_length,input$diameter,input$body_length,
-                   input$cg_measured,input$fin_count,input$fin_root,input$fin_tip,
-                   input$fin_span,input$fin_sweep)
-    if(!all(sapply(needed,isTruthy))) return(NULL)
-    tryCatch(compute_aero(input$nose_type,
-                          to_m(input$nose_length),to_m(input$body_length),
-                          to_m(input$diameter),input$fin_count,
-                          to_m(input$fin_root),to_m(input$fin_tip),
-                          to_m(input$fin_span),to_m(input$fin_sweep),
-                          to_m(input$cg_measured)),
-             error=function(e) NULL)
+    if(!all(sapply(list(input$nose_type, input$fin_count), isTruthy))) return(NULL)
+    if(!all(sapply(list(si$nose_length(), si$body_length(), si$diameter(),
+                        si$fin_root(), si$fin_tip(), si$fin_span(),
+                        si$fin_sweep(), si$cg_measured()), function(x) isTruthy(x) && x > 0))) return(NULL)
+    tryCatch(
+      compute_aero(input$nose_type,
+                   si$nose_length(), si$body_length(),
+                   si$diameter(),    input$fin_count,
+                   si$fin_root(),    si$fin_tip(),
+                   si$fin_span(),    si$fin_sweep(),
+                   si$cg_measured()),
+      error = function(e) NULL)
   })
   
   aero_loaded <- reactive({
-    aero <- aero_reactive(); if(is.null(aero)) return(NULL)
-    td   <- motor_data()
-    if(is.null(td)) return(c(aero,list(stability_margin_loaded=aero$stability_margin,
-                                       cg_loaded=to_m(input$cg_measured))))
-    prop_mass <- td$prop_mass; dry_mass <- get_dry_mass_kg()
-    cg_dry    <- to_m(input$cg_measured)
-    cg_motor  <- to_m(input$nose_length)+to_m(input$body_length)-td$motor_length_m/2
-    cg_loaded <- (dry_mass*cg_dry+prop_mass*cg_motor)/(dry_mass+prop_mass)
-    sm_loaded <- (aero$CP-cg_loaded)/to_m(input$diameter)
-    c(aero,list(stability_margin_loaded=sm_loaded,cg_loaded=cg_loaded))
+    aero <- aero_reactive()
+    if (is.null(aero)) return(NULL)
+    td <- motor_data()
+    if (is.null(td)) return(c(aero, list(stability_margin_loaded = aero$stability_margin,
+                                         cg_loaded = si$cg_measured())))
+    prop_mass <- td$prop_mass
+    dry_mass  <- si$dry_mass()
+    cg_dry    <- si$cg_measured()
+    cg_motor  <- si$nose_length() + si$body_length() - td$motor_length_m / 2
+    cg_loaded <- (dry_mass * cg_dry + prop_mass * cg_motor) / (dry_mass + prop_mass)
+    sm_loaded <- (aero$CP - cg_loaded) / si$diameter()
+    c(aero, list(stability_margin_loaded = sm_loaded, cg_loaded = cg_loaded))
   })
+  
   
   output$stability_indicator <- renderUI({
     al <- aero_loaded()
     if (is.null(al)) return(NULL)
     sm   <- al$stability_margin_loaded
-    fmt  <- function(m) if (use_metric()) sprintf("%.0f mm", m*1000) else sprintf("%.2f in", m*39.37)
+    fmt <- function(m) sprintf("%.1f mm  /  %.2f in", m * 1000, m * 39.3701)
     cls  <- if (sm < 0.5) "stab-red" else if (sm < 1.0) "stab-yellow" else if (sm <= 3.0) "stab-green" else "stab-yellow"
     lbl  <- if (sm < 0.5) "UNSTABLE" else if (sm < 1.0) "MARGINAL" else if (sm <= 3.0) "STABLE" else "OVERSTABLE"
     hint <- if (sm < 0.5) "Unstable. Move CG forward or increase fin size." else
@@ -827,14 +978,14 @@ server <- function(input, output, session) {
     validate(need(!is.null(parsed),"Select an engine on the Setup tab."))
     tryCatch({
       sim <- flight_simulation_3d(
-        parsed$thrust_curve,parsed$prop_mass,get_dry_mass_kg(),
-        to_m(input$diameter),get_chute_diam_m(),input$parachute_delay,
-        aero$Cd,aero$CNa_total,aero$CP,input$precision,
-        get_wind_ms(),input$wind_dir,
-        to_m(input$cg_measured),to_m(input$nose_length),to_m(input$body_length),
-        parsed$motor_length_m,to_m_r(input$rail_length),
-        input$launch_bearing,input$launch_angle,
-        landing_only=FALSE)
+        parsed$thrust_curve, parsed$prop_mass, si$dry_mass(),
+        si$diameter(), si$parachute_diam(), input$parachute_delay,
+        aero$Cd, aero$CNa_total, aero$CP, input$precision,
+        si$wind_speed(), input$wind_dir,
+        si$cg_measured(), si$nose_length(), si$body_length(),
+        parsed$motor_length_m, si$rail_length(),
+        input$launch_bearing, input$launch_angle,
+        landing_only = FALSE)
       res <- list(sim=sim,aero=aero,
                   label=paste0("Run ",length(run_history())+1),
                   motor=if(isTruthy(input$engine_choice)&&input$engine_choice!="") input$engine_choice else "custom")
@@ -942,23 +1093,24 @@ server <- function(input, output, session) {
       withProgress(message="Monte Carlo", value=0, {
         for (i in seq_len(n)) {
           incProgress(1/n, detail=sprintf("Run %d / %d", i, n))
-          dm_kg  <- get_dry_mass_kg() * rnorm(1, 1, 0.01*input$dry_mass_std_dev)
-          pm_kg  <- parsed$prop_mass  * rnorm(1, 1, 0.01*input$prop_mass_std_dev)
-          cd_var <- aero$Cd           * rnorm(1, 1, 0.01*input$cd_std_dev)
+          dm_kg  <- si$dry_mass()      * rnorm(1, 1, 0.01 * input$dry_mass_std_dev)
+          pm_kg  <- parsed$prop_mass   * rnorm(1, 1, 0.01 * input$prop_mass_std_dev)
+          cd_var <- aero$Cd            * rnorm(1, 1, 0.01 * input$cd_std_dev)
+          
           sim <- tryCatch(
             flight_simulation_3d(
               parsed$thrust_curve, pm_kg, dm_kg,
-              to_m(input$diameter), get_chute_diam_m(),
+              si$diameter(), si$parachute_diam(),
               max(0, rnorm(1, input$parachute_delay, input$chute_delay_std_dev)),
-              cd_var, aero$CNa_total, aero$CP, input$precision,
-              max(0, rnorm(1, get_wind_ms(), 0.01*get_wind_ms()*input$wind_speed_std_dev)),
+              cd_var, aero$CNa_total, aero$CP, input$montecarlo_precision,
+              max(0, rnorm(1, si$wind_speed(), 0.01 * si$wind_speed() * input$wind_speed_std_dev)),
               rnorm(1, input$wind_dir, input$wind_dir_std_dev),
-              to_m(input$cg_measured), to_m(input$nose_length), to_m(input$body_length),
-              parsed$motor_length_m, to_m_r(input$rail_length),
+              si$cg_measured(), si$nose_length(), si$body_length(),
+              parsed$motor_length_m, si$rail_length(),
               input$launch_bearing,
               max(0, rnorm(1, input$launch_angle, input$launch_angle_std_dev)),
-              landing_only=TRUE),  
-            error=function(e) NULL)
+              landing_only = TRUE),
+            error = function(e) NULL)
           landings[[i]] <- if (!is.null(sim))
             data.frame(x=sim$x, y=sim$y) 
           else
