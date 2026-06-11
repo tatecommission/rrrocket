@@ -935,18 +935,18 @@ ui <- tagList(
     
     tabPanel("About",
              div(style="max-width:700px;margin:40px auto;",
-                 div(class="card",style="padding:32px;",
+                 div(class="card",style="padding:30px;",
                      h3(style="color:var(--c2);font-weight:800;letter-spacing:1px;margin-bottom:4px;","RRRocket 3D"),
                      p(style="color:var(--c4);font-size:0.8rem;letter-spacing:2px;text-transform:uppercase;margin-bottom:24px;",
                        "Model rocket flight simulator"),
-                     tags$hr(style="border-color:#fc913a33;margin-bottom:24px;"),
+                     tags$hr(style="border-color:#fc913a33;margin-bottom:18px;"),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","What it does"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "RRRocket 3D simulates low-power model rocket flights in three dimensions,
+                       "RRRocket 3D simulates model rocket flights,
          accounting for aerodynamic drag, motor thrust curves, wind weathercocking,
-         parachute descent, and atmospheric density variation with altitude.
-         A Monte Carlo engine propagates uncertainty in wind, ejection delay,
-         and build tolerances to produce a probabilistic landing footprint."),
+         parachute descent, and atmospheric density decreasing with altitude.
+         A data-driven Monte Carlo framework quantifies uncertainy by pulling variables such as wind speed and direction from random distributions
+       to produce a probabilistic landing footprint for your rocket."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Physics"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
@@ -958,16 +958,11 @@ ui <- tagList(
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Monte Carlo"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Each Monte Carlo run perturbs wind speed, wind direction, ejection delay,
-         drag coefficient, dry mass, and propellant mass by user-specified standard
-         deviations. Landing points are plotted on satellite imagery and scored
-         against a user-drawn safe zone polygon. The 95th percentile drift radius
-         is the recommended metric for NAR/Tripoli range safety submissions."),
+                       "Real launches have uncertainty. Perhaps the ejection charge fires a little early or late, the wind suddently gusts, your fin alignment is off by a millimeter. Our Monte Carlo tool runs hundreds of simulations with small variations in these variables, then plots every projected landing point on a satellite map of your launch site. Draw a polygon around your safe landing zone and it tells you what percentage of flights land inside it. This unique tool can help you make safe, data-driven decisions about where and how to launch your rocket."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Engine data"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Thrust curves use the standard RASP .eng file format.
-         Built-in curves are included for common Estes A-D motors. Upload any .eng file from",
+                       "Motors use the standard RASP .eng format from thrustcurve.org. Built-in curves cover common Estes A through G motors. For anything larger, please download the .eng file from thrustcurve.org and upload it directly.",
                        tags$a(href="https://www.thrustcurve.org",target="_blank",style="color:var(--c2);","thrustcurve.org"),
                        "for higher-power motors."),
                      br(),
