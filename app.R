@@ -5,14 +5,13 @@ library(ggplot2)
 library(leaflet)
 library(leaflet.extras)
 
-# ── Physical constants (SI throughout) ──────────────────────────────────────
-g0       <- 9.80665    # m/s²  standard gravity
-R_air    <- 287.058    # J/(kg·K)  specific gas constant for dry air
-gamma_a  <- 1.4        # ratio of specific heats for air
-Cf       <- 0.005      # turbulent skin friction coefficient (flat-plate approx)
-Cd_chute <- 0.97       # round parachute drag coefficient (referenced to canopy area)
+# physical constants
+g0       <- 9.80665
+R_air    <- 287.058
+gamma_a  <- 1.4
+Cf       <- 0.005
+Cd_chute <- 0.75
 
-# ── Unit conversion helpers ──────────────────────────────────────────────────
 m_to_ft  <- 3.28084
 N_to_lbf <- 0.224809
 
@@ -36,23 +35,15 @@ from_meters <- function(si, unit) switch(unit, "mm"=si*1000, "cm"=si*100, "in"=s
 from_kg     <- function(si, unit) switch(unit, "g"=si*1000, "oz"=si/0.0283495, "kg"=si, "lb"=si/0.453592, si*1000)
 from_ms     <- function(si, unit) switch(unit, "m/s"=si, "mph"=si/0.44704, "km/h"=si*3.6, "knots"=si/0.514444, si)
 
-# ── International Standard Atmosphere (troposphere only for model rockets) ───
-# Model rockets rarely exceed ~3 km; the troposphere (0–11 km) is all we need.
-# Higher ISA layers kept as fallback but will never be reached in practice.
+# model just the troposphere from ISA
 isa_atm <- function(z) {
   z <- max(z, 0)
-  if (z <= 11000) {
-    T   <- 288.15 - 0.0065 * z
-    rho <- 1.225 * (T / 288.15)^4.2561
-  } else {
-    # Isothermal stratosphere — included only as a safety fallback
-    T   <- 216.65
-    rho <- 0.36392 * exp(-0.0001577 * (z - 11000))
-  }
-  list(rho = rho, a = sqrt(gamma_a * R_air * T))   # a = speed of sound (m/s)
+  T   <- 288.15 - 0.0065 * z
+   rho <- 1.225 * (T / 288.15)^4.2561
+   list(rho = rho, a = sqrt(gamma_a * R_air * T))   # a = speed of sound (m/s)
 }
 
-# ── Mach-number drag correction ──────────────────────────────────────────────
+# Drag correction based on mach number
 # Below M=0.8: Prandtl-Glauert compressibility factor  1/sqrt(1-M²).
 # M=0.8–1.0:   Linear transonic ramp starting from the P-G value at M=0.8
 #              (1.667) and peaking at ~2.4 at M=1.0.  The slope is chosen
