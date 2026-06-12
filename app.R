@@ -5,208 +5,174 @@ library(ggplot2)
 library(leaflet)
 library(leaflet.extras)
 
-# physical constants
-g0       <- 9.80665
-R_air    <- 287.058
-gamma_a  <- 1.4
-Cf       <- 0.005
-Cd_chute <- 0.75
-
-m_to_ft  <- 3.28084
-N_to_lbf <- 0.224809
-
 unit_choices_length <- c("mm", "cm", "in", "ft", "m")
 unit_choices_mass   <- c("g", "oz", "kg", "lb")
 unit_choices_speed  <- c("m/s", "mph", "km/h", "knots")
 
-to_meters <- function(val, unit) {
-  if (!isTruthy(val)) return(0)
-  switch(unit, "mm"=val/1000, "cm"=val/100, "in"=val*0.0254, "ft"=val*0.3048, "m"=val, val/1000)
-}
-to_kg <- function(val, unit) {
-  if (!isTruthy(val)) return(0)
-  switch(unit, "g"=val/1000, "oz"=val*0.0283495, "kg"=val, "lb"=val*0.453592, val/1000)
-}
-to_ms <- function(val, unit) {
-  if (!isTruthy(val)) return(0)
-  switch(unit, "m/s"=val, "mph"=val*0.44704, "km/h"=val/3.6, "knots"=val*0.514444, val)
-}
-from_meters <- function(si, unit) switch(unit, "mm"=si*1000, "cm"=si*100, "in"=si/0.0254, "ft"=si/0.3048, "m"=si, si*1000)
-from_kg     <- function(si, unit) switch(unit, "g"=si*1000, "oz"=si/0.0283495, "kg"=si, "lb"=si/0.453592, si*1000)
-from_ms     <- function(si, unit) switch(unit, "m/s"=si, "mph"=si/0.44704, "km/h"=si*3.6, "knots"=si/0.514444, si)
+# modeled off of OpenRocket technical documentation
+# Nisanken 2013, Barrowman 1967
 
-# model just the troposphere from ISA
+g0      <- 9.80665
+R_air   <- 287.058
+gamma_a <- 1.4
+Cd_chute <- 0.80 # from OpenRocket
+m_to_ft  <- 3.28084
+N_to_lbf <- 0.224809
+
+# only troposphere
 isa_atm <- function(z) {
-  z <- max(z, 0)
+  z   <- max(z, 0)
   T   <- 288.15 - 0.0065 * z
-   rho <- 1.225 * (T / 288.15)^4.2561
-   list(rho = rho, a = sqrt(gamma_a * R_air * T))   # a = speed of sound (m/s)
+  rho <- 1.225 * (T / 288.15)^4.2561
+  list(rho = rho, a = sqrt(gamma_a * R_air * T))
 }
 
-# Drag correction based on mach number
-# Below M=0.8: Prandtl-Glauert compressibility factor  1/sqrt(1-M²).
-# M=0.8–1.0:   Linear transonic ramp starting from the P-G value at M=0.8
-#              (1.667) and peaking at ~2.4 at M=1.0.  The slope is chosen
-#              so the curve is continuous — the original code started the ramp
-#              at 1.0, creating a spurious 0.67 drop at M=0.8.
-# M=1.0–2.0:   Supersonic decay to 1.6 at M=2 (empirical; rarely reached by
-#              model rockets).
-# M>=2.0:      Approximately constant at 1.6 (hypersonic regime).
-#
-# For low-power model rockets (M < 0.4), P-G gives < 9% correction; the
-# transonic region is kept for high-power / experimental motors only.
+# implement Cf calcs from openrocket
+# Turbulent smooth:     Cf = 1 / (1.50*ln(R) - 5.6)^2
+# Roughness-limited:    Cf = 0.032 * (Rs/L)^0.2
+# Low-Re floor:         Cf = 0.0148  (R < 1e4)
+# Subsonic Mach corr.:  Cf_c = Cf * (1 - 0.1*M^2)        [eq 3.82]
+# Supersonic Mach corr: Cf_c = Cf / (1 + 0.15*M^2)^0.58  [eq 3.83]
+# Rs = surface roughness height (m).  Default 60e-6 m ("optimum
+#      paint-sprayed" finish, mid-range of Table 3.2) — the caller
+#      can override.
+
+skin_friction_cf <- function(velocity, char_length, mach,
+                             Rs = 60e-6) {
+  # Kinematic viscosity of air at ~15 °C (ISA sea level)
+  nu <- 1.461e-5
+  Re <- max(velocity * char_length / nu, 1)
+  
+  # Critical Reynolds number for roughness transition (eq 3.79):
+  #   Rcrit = 51 * (Rs/L)^(-1.039)
+  
+  Rcrit <- 51 * (Rs / char_length)^(-1.039)
+  
+  if (Re < 1e4) {
+    Cf <- 1.48e-2                              # low-Re floor
+  } else if (Re < Rcrit) {
+    Cf <- 1 / (1.50 * log(Re) - 5.6)^2        # turbulent smooth (eq 3.78)
+  } else {
+    Cf <- 0.032 * (Rs / char_length)^0.2      # roughness-limited (eq 3.80)
+  }
+  
+  # air compresses around rocket, reduces skin friction at higher mach#
+  if (mach < 1.0) {
+    Cf_c <- Cf * (1.0 - 0.1 * mach^2)
+  } else {
+    Cf_c <- Cf / (1.0 + 0.15 * mach^2)^0.58
+    if (Re >= Rcrit) {
+      Cf_c_rough <- Cf / (1.0 + 0.18 * mach^2)
+      Cf_c <- max(Cf_c, Cf_c_rough)
+    }
+  }
+  
+  Cf_c
+}
+
+# multiply Cd by these numbers for each mach #
+#   M < 0.8 : Prandtl-Glauert  1/sqrt(1-M^2)
+#   0.8–1.0 : continuous transonic ramp → 2.4 at M=1
+#   1.0–2.0 : supersonic decay → 1.6 at M=2
+#   M ≥ 2.0 : ~constant 1.6
 mach_cd_factor <- function(M) {
-  if      (M < 0.8) 1 / sqrt(max(1 - M^2, 0.01))          # Prandtl-Glauert
-  else if (M < 1.0) 1.6667 + 3.6667 * (M - 0.8)           # continuous transonic ramp → 2.4 at M=1
-  else if (M < 2.0) 2.4 - 0.8 * (M - 1.0)                 # supersonic decay → 1.6 at M=2
+  if      (M < 0.8) 1 / sqrt(max(1 - M^2, 0.01))
+  else if (M < 1.0) 1.6667 + 3.6667 * (M - 0.8)
+  else if (M < 2.0) 2.4 - 0.8 * (M - 1.0)
   else              1.6
 }
 
-# ── Barrowman aerodynamic coefficients ──────────────────────────────────────
-#
-# Reference: Barrowman, J.S. (1967). "The Practical Calculation of the
-# Aerodynamic Characteristics of Slender Finned Vehicles."
-#
-# All lengths in meters, area in m².
-# The stability margin is (CP − CG) / body_diameter in calibers.
-#
-# What is included (standard Barrowman):
-#   • Nosecone normal-force coefficient and pressure-drag coefficient
-#   • Fin normal-force coefficient with body-interference factor (Kfb)
-#   • Fin CP location
-#   • Skin-friction drag for body, nosecone, and fins from wetted areas
-#   • Base drag (Hoerner formula)
-#
-# What was REMOVED vs. the previous version:
-#   • Body-lift term  CNa_bg = 2*0.9*(L_body*d/Aref)
-#     This was NOT standard Barrowman. For a constant-diameter cylinder the
-#     Barrowman body-lift is zero (front and rear cross-sections are equal so
-#     the pressure-area integrals cancel). The factor 0.9 inflated CNa by a
-#     factor of ~6×, pushing CP unrealistically far forward and over-predicting
-#     stability.
-#
-# What was FIXED:
-#   • Cd_body was a fixed 0.01.  Replaced with Cf*(Awet_body/Aref) so drag
-#     scales with rocket geometry. Similarly for nose friction (added separately
-#     from the existing nose pressure-drag term so both are counted).
-#   • Cd_fins: was Cf=0.008; changed to 0.005 (turbulent flat-plate Cf, consistent
-#     with the body and nose).
-#
+# Openrocket
 compute_aero <- function(nose_type, nose_length, body_length,
                          bt_diameter, fin_count, fin_root,
-                         fin_tip, fin_span, fin_sweep, cg_measured) {
+                         fin_tip, fin_span, fin_sweep, cg_measured,
+                         ref_velocity = 50) {
   
   bt_radius <- bt_diameter / 2
-  Aref      <- pi * bt_radius^2           # frontal (reference) area
+  Aref      <- pi * bt_radius^2
   
-  # ── Nosecone ──────────────────────────────────────────────────────────────
-  # CP locations from Barrowman (1967) Table 1:
   Xcp_nose <- switch(nose_type,
                      conical    = (2/3) * nose_length,
                      ogive      = 0.466 * nose_length,
                      parabolic  = 0.5   * nose_length)
   
-  # Nosecone normal-force coefficient gradient (= 2.0 for any slender nosecone)
   CNa_nose <- 2.0
   
-  # Nosecone pressure drag (half-angle Newtonian / empirical):
-  ha <- atan(bt_radius / nose_length)     # half-angle of nosecone
+  ha <- atan(bt_radius / nose_length)
   Cd_nose_pressure <- switch(nose_type,
-                             conical   = 0.8  * sin(ha)^2,
-                             ogive     = 0.5  * sin(ha)^2,
-                             parabolic = 0.3  * (bt_diameter / nose_length)^2)
+                             conical   = 0.8 * sin(ha)^2,
+                             ogive     = 0.5 * sin(ha)^2,
+                             parabolic = 0.3 * (bt_diameter / nose_length)^2)
   
-  # Nosecone skin-friction drag (wetted area approximated as slant surface of cone):
   nose_slant <- sqrt(nose_length^2 + bt_radius^2)
   Awet_nose  <- pi * bt_radius * nose_slant
-  Cd_nose_friction <- Cf * Awet_nose / Aref
-  
+  rocket_length <- nose_length + body_length
+# nose
+  Cf_nose <- skin_friction_cf(ref_velocity, rocket_length, mach = 0)
+  Cd_nose_friction <- Cf_nose * Awet_nose / Aref
   Cd_nose <- Cd_nose_pressure + Cd_nose_friction
-  
-  # ── Body tube — skin friction only (no pressure drag for cylindrical tube) ─
-  # A constant-diameter cylinder has no form drag; only skin friction.
+# bt
   Awet_body <- pi * bt_diameter * body_length
-  Cd_body   <- Cf * Awet_body / Aref
+  fB        <- rocket_length / bt_diameter          # fineness ratio
+  Cf_body   <- skin_friction_cf(ref_velocity, rocket_length, mach = 0)
+  Cd_body   <- Cf_body * (1 + 2 / fB) * Awet_body / Aref
   
-  # ── Fins ──────────────────────────────────────────────────────────────────
-  # Barrowman eq. 3.39 (without body interference):
-  #   CNa_fins = [4·N·(s/d)²] / [1 + sqrt(1 + (2s/(Cr+Ct))²)]
-  # Body-interference factor (Barrowman eq. 3.40):
-  #   Kfb = 1 + r/(r+s)
-  Afin_one  <- 0.5 * (fin_root + fin_tip) * fin_span   # trapezoidal plan area
+# fins
+  Afin_one  <- 0.5 * (fin_root + fin_tip) * fin_span
   Kfb       <- 1 + bt_radius / (fin_span + bt_radius)
   CNa_fin   <- Kfb * (4 * fin_count * (fin_span / bt_diameter)^2) /
     (1 + sqrt(1 + (2 * fin_span / (fin_root + fin_tip))^2))
   
-  # Fin CP location (Barrowman eq. 3.26); Xb = leading edge of fin root chord:
   Xb      <- nose_length + body_length
   Xcp_fin <- Xb +
-    (fin_sweep / 3) * ((fin_root + 2*fin_tip) / (fin_root + fin_tip)) +
-    (1/6) * (fin_root + fin_tip - fin_root*fin_tip / (fin_root + fin_tip))
+    (fin_sweep / 3) * ((fin_root + 2 * fin_tip) / (fin_root + fin_tip)) +
+    (1 / 6) * (fin_root + fin_tip - fin_root * fin_tip / (fin_root + fin_tip))
   
-  # Fin skin-friction drag (both sides of each fin):
   Awet_fins <- 2 * fin_count * Afin_one
-  Cd_fins   <- Cf * Awet_fins / Aref
+ 
+  # calc fin area
+  c_bar_fin <- (fin_root + fin_tip) / 2
+  Cf_fins   <- skin_friction_cf(ref_velocity, c_bar_fin, mach = 0)
+  Cd_fins <- Cf_fins * Awet_fins / Aref
   
-  # ── Composite CP and CNa ──────────────────────────────────────────────────
-  # Barrowman: total CP is the area-moment centroid of all lifting surfaces.
-  # Body tube contributes zero CNa (constant diameter → no net Barrowman lift).
+  # find center of pressure
   CNa_total <- CNa_nose + CNa_fin
   CP        <- (CNa_nose * Xcp_nose + CNa_fin * Xcp_fin) / CNa_total
   
-  # ── Base drag (Hoerner 1965 formula) ─────────────────────────────────────
-  # Cd_base = 0.029 / sqrt(Cd_parasite), where Cd_parasite is everything else.
-  Cd_parasite <- Cd_nose + Cd_body + Cd_fins
-  Cd_base     <- 0.029 / sqrt(max(Cd_parasite, 1e-6))
+  # cd_base only used to calculate stability for popup, not for sim
+  Cd_base <- 0.12   # M = 0 reference value
   
-  Cd_total <- Cd_parasite + Cd_base
+  Cd_parasite <- Cd_nose + Cd_body + Cd_fins
+  Cd_total    <- Cd_parasite + Cd_base
   
   list(
-    Cd              = Cd_total,
-    CP              = CP,
-    stability_margin = (CP - cg_measured) / bt_diameter,   # calibers
-    CNa_total       = CNa_total,
-    # breakdown for diagnostics:
-    Cd_nose         = Cd_nose,
-    Cd_body         = Cd_body,
-    Cd_fins         = Cd_fins,
-    Cd_base         = Cd_base
+    Cd               = Cd_total,
+    Cd_nose          = Cd_nose,
+    Cd_body          = Cd_body,
+    Cd_fins          = Cd_fins,
+    Cd_base          = Cd_base,
+    Cd_parasite      = Cd_parasite,
+    CP               = CP,
+    CNa_total        = CNa_total,
+    stability_margin = (CP - cg_measured) / bt_diameter
   )
 }
 
-# ── Weathercocking gain ──────────────────────────────────────────────────────
-# A more stable rocket (larger SM) weathercocks more aggressively because its
-# restoring moment dominates. This heuristic scales linearly with SM up to
-# SM = 3 cal, then saturates.
+# cd during flight
+
+live_base_drag <- function(M) {
+  if (M < 1.0) 0.12 + 0.13 * M^2
+  else         0.25 / M
+}
+
+# approximates 6DOF weathercocking, saves computational complexity
 weathercock_gain <- function(sm) max(min(sm / 3.0, 1.0) * 0.6, 0)
 
-# ── 3-D flight simulation ────────────────────────────────────────────────────
-#
-# Coordinate system: x = East, y = North, z = Up (all meters).
-# The simulation integrates Newton's second law with:
-#   • Rocket thrust (from .eng thrust curve)
-#   • Gravitational force (constant g0, no altitude variation — negligible for
-#     model rockets that never exceed ~5 km)
-#   • Aerodynamic drag (Mach-corrected Cd, or chute Cd after deployment)
-#   • Weathercocking side force (proportional to CNa and lateral wind AoA)
-#   • Wind with Ornstein-Uhlenbeck turbulence (log-law wind shear with altitude)
-#
-# What was REMOVED vs. the previous version:
-#   • Weibull gust model: rweibull() was called on EVERY time step, which is
-#     both physically incorrect (Weibull is a lifetime/event distribution, not a
-#     per-timestep PDF) and slow (one RNG call per 0.01 s → thousands per flight).
-#     Replaced with a simple Ornstein-Uhlenbeck process driven by Gaussian noise,
-#     which is the standard stochastic model for atmospheric turbulence.
-#
-# Wind model:
-#   Log-law wind shear:  V_wind(z) = V_ref * (z/z_ref)^0.14  (z_ref = 10 m)
-#   OU turbulence:       dw = -alpha*(w - w_mean)*dt + sigma_w*sqrt(dt)*rnorm()
-#   where alpha = 0.5 s⁻¹ (decorrelation rate) and sigma_w = 0.15 * V_ref.
-#
+###sim
 flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
-                                 casing_mass,                    # motor hardware — stays on board
+                                 casing_mass,
                                  bt_diameter, chute_diameter, chute_delay,
-                                 Cd, CNa_total, CP, precision,
+                                 Cd_parasite, CNa_total, CP, precision,
                                  wind_speed_ref, wind_dir_deg,
                                  cg_dry_m, nose_length, body_length,
                                  motor_length_m, rail_length_m,
@@ -215,108 +181,100 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
   
   if (is.null(thrust_curve) || nrow(thrust_curve) == 0) return(NULL)
   
-  thrust    <- approxfun(thrust_curve$time, thrust_curve$thrust, yleft=0, yright=0)
+  thrust    <- approxfun(thrust_curve$time, thrust_curve$thrust,
+                         yleft = 0, yright = 0)
   burn_time <- max(thrust_curve$time)
   
-  # The motor casing stays on board for the entire flight (it doesn't eject).
-  # Fold it into the airframe mass so it's correctly accounted for from launch
-  # through landing, and its CG contribution persists after propellant is gone.
-  # cg_motor is the location of both the casing and the propellant (same centroid).
   eff_dry_mass <- dry_mass + casing_mass
   
-  # Effective exhaust velocity from total impulse and propellant mass:
-  #   I_total = ∫T dt = m_prop * Ve   →   Ve = I_total / m_prop
-  total_imp <- integrate(thrust, min(thrust_curve$time), max(thrust_curve$time))$value
+  total_imp <- integrate(thrust,
+                         min(thrust_curve$time),
+                         max(thrust_curve$time))$value
   v_exhaust <- total_imp / prop_mass
   if (!is.finite(v_exhaust) || v_exhaust <= 0) {
-    showNotification("Invalid .eng file: check thrust curve", type="error")
+    showNotification("Invalid .eng file: check thrust curve", type = "error")
     return(NULL)
   }
   
-  # Geometry / areas
-  bt_area    <- pi * (bt_diameter/2)^2
-  chute_area <- pi * (chute_diameter/2)^2  # nominal canopy area
+  bt_area    <- pi * (bt_diameter / 2)^2
+  chute_area <- pi * (chute_diameter / 2)^2
   
-  # Motor CG location (measured from nose tip), assumed at geometric center:
   cg_motor <- nose_length + body_length - motor_length_m / 2
   
-  # Launch direction unit vector (x=East, y=North, z=Up):
-  ar <- launch_angle_deg  * pi / 180
+  ar <- launch_angle_deg   * pi / 180
   br <- launch_bearing_deg * pi / 180
   lx <- sin(ar) * sin(br)
   ly <- sin(ar) * cos(br)
   lz <- cos(ar)
   
-  # Rail exit height (vertical component only):
   rail_ht <- rail_length_m * cos(ar)
-  
-  # Initial conditions:
+
+  # Euler's method to keep runs short and feasible for mc
   x  <- 0; y  <- 0; z  <- 0
   vx <- 0; vy <- 0; vz <- 0
   m  <- eff_dry_mass + prop_mass
   m_prop <- prop_mass
   t  <- 0
-  t_apogee  <- NA
+  t_apogee   <- NA
   chute_open <- FALSE
   on_rail    <- TRUE
   
-  # Wind initial state — pointing FROM the given direction:
   wd_rad <- wind_dir_deg * pi / 180
   wx <- -wind_speed_ref * sin(wd_rad)
   wy <- -wind_speed_ref * cos(wd_rad)
-  sigma_w <- 0.15 * max(wind_speed_ref, 0.01)  # turbulence intensity
   
-  # Allocate output (only for full run):
   max_steps <- ceiling(1200 / max(precision, 0.001))
   if (!landing_only) {
     out <- data.frame(
-      time            = numeric(max_steps),
-      x               = numeric(max_steps),
-      y               = numeric(max_steps),
-      altitude        = numeric(max_steps),
-      velocity        = numeric(max_steps),
-      vx              = numeric(max_steps),
-      vy              = numeric(max_steps),
-      vz              = numeric(max_steps),
-      mach            = numeric(max_steps),
+      time             = numeric(max_steps),
+      x                = numeric(max_steps),
+      y                = numeric(max_steps),
+      altitude         = numeric(max_steps),
+      velocity         = numeric(max_steps),
+      vx               = numeric(max_steps),
+      vy               = numeric(max_steps),
+      vz               = numeric(max_steps),
+      mach             = numeric(max_steps),
       stability_margin = numeric(max_steps)
     )
     i <- 1L
   }
   
   repeat {
-    # Use a finer step during powered flight and coast near apogee;
-    # a coarser step is fine during chute descent.
     dt <- if (t <= burn_time + 1.0) min(precision, 0.01) else max(precision, 0.02)
     
-    # ── Atmosphere ──────────────────────────────────────────────────────────
     atm   <- isa_atm(z)
     rho   <- atm$rho
     a_snd <- atm$a
     
-    # ── Wind: log-law shear + OU turbulence ─────────────────────────────────
-    # Wind shear: speed increases with altitude per the 1/7-power law.
-    z_ref   <- 10.0      # reference height (m)
-    shear   <- (max(z, z_ref) / z_ref)^0.14
-    mu_x    <- -wind_speed_ref * shear * sin(wd_rad)
-    mu_y    <- -wind_speed_ref * shear * cos(wd_rad)
-    # OU update: mean-revert toward shear-corrected wind mean, add Gaussian gust
+# wind physics, gusts follow Normal dist, 
+    z_ref <- 10.0
+    shear <- (max(z, z_ref) / z_ref)^0.14
+    mu_x  <- -wind_speed_ref * shear * sin(wd_rad)
+    mu_y  <- -wind_speed_ref * shear * cos(wd_rad)
+    
+
+    local_wind_speed <- wind_speed_ref * shear
+    sigma_w <- 0.15 * max(local_wind_speed, 0.01)
+    
+    # OU update: mean-revert toward altitude-corrected mean, add Gaussian gust.
+    # Decorrelation rate alpha = 0.5 s^-1
     wx <- wx + 0.5 * (mu_x - wx) * dt + sigma_w * sqrt(dt) * rnorm(1)
     wy <- wy + 0.5 * (mu_y - wy) * dt + sigma_w * sqrt(dt) * rnorm(1)
     
-    # ── Relative velocity (rocket velocity minus wind) ───────────────────────
+    # relative vel in each coordinate
     vrx <- vx - wx
     vry <- vy - wy
     vrz <- vz
     vrm <- max(sqrt(vrx^2 + vry^2 + vrz^2), 1e-6)
     M   <- vrm / a_snd
     
-    # ── Drag force ──────────────────────────────────────────────────────────
+    # drag force
     if (chute_open) {
-      Cd_eff   <- Cd_chute
+      Cd_eff   <- Cd_chute   # [OR-FIX] 0.80 (Hoerner default, matches OpenRocket)
       area_eff <- chute_area
     } else {
-      Cd_eff   <- Cd * mach_cd_factor(M)
+      Cd_eff   <- Cd_parasite * mach_cd_factor(M) + live_base_drag(M)
       area_eff <- bt_area
     }
     q  <- 0.5 * rho * vrm^2
@@ -325,56 +283,44 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
     Fdy <- -Fd * (vry / vrm)
     Fdz <- -Fd * (vrz / vrm)
     
-    # ── Thrust ──────────────────────────────────────────────────────────────
-    Ft  <- thrust(t)
+    Ft <- thrust(t)
     
-    # ── Live CG and stability margin ────────────────────────────────────────
-    # Mass-weighted centroid of (airframe + casing) + (remaining propellant).
-    # After burnout, m_prop → 0 so CG is just (eff_dry_mass * cg_dry_m + casing at cg_motor)
-    # which is already baked into eff_dry_mass's weighted position via cg_dry_m.
-    # NOTE: cg_dry_m was measured with the (empty) casing installed, so this is correct.
     cg_live <- (eff_dry_mass * cg_dry_m + m_prop * cg_motor) / m
-    sm_live <- (CP - cg_live) / bt_diameter   # stability margin (calibers)
+    sm_live <- (CP - cg_live) / bt_diameter
     
-    # ── Weathercocking side force ────────────────────────────────────────────
-    # Only applies after rail exit and before apogee, while flying upward.
-    # The rocket's restoring moment turns it toward the relative wind;
-    # the side force magnitude scales with dynamic pressure and CNa.
+    # weathercocking side force
     Fwx <- 0; Fwy <- 0
     if (on_rail && z >= rail_ht) on_rail <- FALSE
     if (!on_rail && is.na(t_apogee) && vz > 0.5) {
-      lat_wx  <- wx - vx      # lateral wind relative to rocket
+      lat_wx  <- wx - vx
       lat_wy  <- wy - vy
       lat_wm  <- max(sqrt(lat_wx^2 + lat_wy^2), 1e-6)
-      sin_aoa <- min(lat_wm / vrm, 1.0)    # sin of angle of attack (clamped)
+      sin_aoa <- min(lat_wm / vrm, 1.0)
       wc      <- weathercock_gain(sm_live)
       Fw      <- wc * CNa_total * q * bt_area * sin_aoa
       Fwx     <- Fw * (lat_wx / lat_wm)
       Fwy     <- Fw * (lat_wy / lat_wm)
     }
     
-    # ── Equations of motion ──────────────────────────────────────────────────
+    # kinematics
     ax <- (Fdx + Fwx + Ft * lx) / m
     ay <- (Fdy + Fwy + Ft * ly) / m
     az <- (Ft  * lz  + Fdz - m * g0) / m
     
-    # Store state (full run only)
     if (!landing_only) {
-      out$time[i]            <- t
-      out$x[i]               <- x
-      out$y[i]               <- y
-      out$altitude[i]        <- z
-      out$velocity[i]        <- sqrt(vx^2 + vy^2 + vz^2)
-      out$vx[i]              <- vx
-      out$vy[i]              <- vy
-      out$vz[i]              <- vz
-      out$mach[i]            <- M
+      out$time[i]             <- t
+      out$x[i]                <- x
+      out$y[i]                <- y
+      out$altitude[i]         <- z
+      out$velocity[i]         <- sqrt(vx^2 + vy^2 + vz^2)
+      out$vx[i]               <- vx
+      out$vy[i]               <- vy
+      out$vz[i]               <- vz
+      out$mach[i]             <- M
       out$stability_margin[i] <- sm_live
       i <- i + 1L
     }
     
-    # ── Integrate (Euler) ────────────────────────────────────────────────────
-    # Propellant drain: dm/dt = −T/Ve  (from Tsiolkovsky / momentum conservation)
     if (t <= burn_time) {
       m_prop <- max(m_prop - (Ft / v_exhaust) * dt, 0)
       m      <- eff_dry_mass + m_prop
@@ -388,9 +334,7 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
     
     if (is.na(t_apogee) && z > 1 && vz < 0) t_apogee <- t
     
-    # ── Termination ──────────────────────────────────────────────────────────
     if (!is.na(t_apogee) && z <= 0) {
-      # Linear interpolation back to z=0 for accurate landing point
       if (landing_only) {
         frac <- if (abs(vz * dt) > 1e-9) z / (vz * dt) else 0
         x <- x - vx * dt * frac
@@ -402,12 +346,12 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
     if (t > 1200 || (!landing_only && i >= max_steps)) break
   }
   
-  if (landing_only) return(data.frame(x = x, y = y))   # fallback if loop exits
+  if (landing_only) return(data.frame(x = x, y = y))
   
-  result <- out[1:(i-1), ]
-  # Tag the rail-exit speed for the summary output:
+  result <- out[1:(i - 1), ]
   rail_row <- which(result$altitude >= rail_ht)
-  attr(result, "rail_exit_ms") <- if (length(rail_row) > 0) result$velocity[rail_row[1]] else NA_real_
+  attr(result, "rail_exit_ms") <-
+    if (length(rail_row) > 0) result$velocity[rail_row[1]] else NA_real_
   result
 }
 
