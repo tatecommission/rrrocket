@@ -15,7 +15,7 @@ unit_choices_speed  <- c("m/s", "mph", "km/h", "knots")
 g0      <- 9.80665
 R_air   <- 287.058
 gamma_a <- 1.4
-Cd_chute <- 0.80 # from OpenRocket
+Cd_chute <- 0.80
 m_to_ft  <- 3.28084
 N_to_lbf <- 0.224809
 
@@ -159,7 +159,6 @@ compute_aero <- function(nose_type, nose_length, body_length,
   
   Awet_fins <- 2 * fin_count * Afin_one
  
-  # calc fin area
   c_bar_fin <- (fin_root + fin_tip) / 2
   Cf_fins   <- skin_friction_cf(ref_velocity, c_bar_fin, mach = 0)
   Cd_fins <- Cf_fins * Awet_fins / Aref
@@ -169,7 +168,7 @@ compute_aero <- function(nose_type, nose_length, body_length,
   CP        <- (CNa_nose * Xcp_nose + CNa_fin * Xcp_fin) / CNa_total
   
   # cd_base only used to calculate stability for popup, not for sim
-  Cd_base <- 0.12   # M = 0 reference value
+  Cd_base <- 0.12
   
   Cd_parasite <- Cd_nose + Cd_body + Cd_fins
   Cd_total    <- Cd_parasite + Cd_base
@@ -658,6 +657,23 @@ pre,.shiny-verbatim-output {
 .num-wrap { flex:2; }
 .sel-wrap { flex:1; }
 .unit-lbl { font-size:0.67rem;color:var(--c4);text-transform:uppercase;letter-spacing:.08em;font-weight:600;display:block;margin-bottom:3px; }
+
+/* FOOTER */
+.app-footer {
+  position:relative;z-index:2;
+  border-top:1px solid #fc913a33;
+  padding:18px 32px;
+  margin-top:40px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:0.65rem;
+  color:#eae374aa;
+  letter-spacing:0.06em;
+}
+.app-footer a { color:#fc913a88;text-decoration:none; }
+.app-footer a:hover { color:var(--c2); }
+
 "
 
 # ── UI helper: paired numeric + unit selector ────────────────────────────────
@@ -843,20 +859,47 @@ ui <- tagList(
                      tags$hr(style="border-color:#fc913a33;margin-bottom:18px;"),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","What it does"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "RRRocket 3D simulates model rocket flights, accounting for aerodynamic drag,
-            motor thrust curves, wind weathercocking, parachute descent, and atmospheric
-            density decreasing with altitude. A Monte Carlo framework quantifies uncertainty
-            by varying launch conditions to produce a probabilistic landing footprint."),
+                       "RRRocket 3D simulates model rocket flights and landings. My goal is to create a website that is both accurate and easy-to-use for hobbyists and professionals alike."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Physics"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Aerodynamics use the standard Barrowman equations (1967). Drag is split into
-            nosecone pressure drag, skin-friction drag (body, nosecone, fins — all
-            computed from wetted area with Cf = 0.005), and base drag (Hoerner formula).
-            Drag is Mach-corrected with Prandtl-Glauert below M=0.8 and an empirical
-            transonic ramp above. Atmosphere follows the International Standard Atmosphere
-            troposphere model. Wind turbulence uses an Ornstein-Uhlenbeck process with
-            a 1/7-power-law wind-shear profile."),
+                       "Aerodynamics follow the Barrowman method (1967) for subsonic CP and normal-force
+  coefficient estimation, as implemented and extended in the OpenRocket technical
+  documentation (Niskanen 2013). The rocket is split into nose cone, body tube, and
+  fins. Nose cone CP locations use the standard Barrowman closed-form solutions for
+  ogive, conical, and parabolic profiles. Fin normal-force coefficient is computed
+  with the body-interference factor Kfb. CP is the CNa-weighted centroid of all
+  lifting surfaces."),
+                     br(),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Drag is decomposed into four components. Nose pressure drag uses the half-angle
+  sine-squared formula. Skin friction drag is computed from the Reynolds-number-based
+  turbulent flat-plate formula (Barrowman eq. 3.78), switching to a roughness-limited
+  value (eq. 3.80) above the critical Reynolds number, with a Mach compressibility
+  correction applied subsonic and supersonic (eqs. 3.82-3.83). The body wetted area
+  includes a fineness-ratio correction (1 + 2/fB). Base drag uses the Hoerner
+  Mach-dependent formula: 0.12 + 0.13M\u00b2 for M < 1, 0.25/M for M \u2265 1, applied
+  per timestep during simulation. The parasite drag coefficient is Mach-scaled using
+  a Prandtl-Glauert factor below M = 0.8, a continuous transonic ramp to M = 1, and
+  an empirical supersonic decay above."),
+                     br(),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "The atmosphere follows the ISA troposphere model (288.15 K at sea level,
+  -6.5 K/km lapse rate). Wind uses a 1/7-power-law altitude shear profile with an
+  Ornstein-Uhlenbeck turbulence process (decorrelation rate 0.5 s\u207b\u00b9, turbulence
+  intensity 15% of local wind speed). Flight is integrated with Euler's method.
+  CG is tracked live throughout burn as propellant drains via the Tsiolkovsky
+  mass-flow relation. Stability margin is computed in calibers at each timestep.
+  Weathercocking is approximated as a lateral force proportional to CNa, dynamic
+  pressure, and angle of attack, scaled by a heuristic gain that saturates at 3
+  calibers stability margin."),
+                     br(),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Monte Carlo perturbs ejection delay, launch angle, wind speed and direction,
+  dry mass, drag coefficient, and propellant mass by independent Gaussian draws
+  with user-specified standard deviations. Each run returns only the landing
+  coordinate for speed. Results are plotted on a satellite map; a ray-casting
+  algorithm determines what fraction of landings fall within a user-drawn polygon."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Monte Carlo"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
@@ -895,11 +938,18 @@ ui <- tagList(
                "display:inline-block;"
              ), "<GitHub>"
              )
+    ),
+    tags$footer(class = "app-footer",
+                span("\u00a9 2026 Tate Commission. All rights reserved."),
+                span(
+                  tags$a(href="https://github.com/tatecommission/rrrocket", target="_blank", "GitHub")
+                )
     )
+    
   )
 )
 
-# ── Plot theme ───────────────────────────────────────────────────────────────
+# general plot theme
 theme_plot <- function() {
   theme_minimal(base_size=11) + theme(
     plot.background  = element_rect(fill="#120800", color=NA),
@@ -913,7 +963,6 @@ theme_plot <- function() {
     plot.margin      = margin(8,12,8,8))
 }
 
-# ── Server ───────────────────────────────────────────────────────────────────
 server <- function(input, output, session) {
   
   use_metric      <- reactiveVal(TRUE)
@@ -929,7 +978,6 @@ server <- function(input, output, session) {
   outputOptions(output, "has_results", suspendWhenHidden=FALSE)
   outputOptions(output, "has_mc",      suspendWhenHidden=FALSE)
   
-  # ── SI stores (all values in SI units internally) ──────────────────────────
   si <- list(
     dry_mass       = reactiveVal(0.090),
     diameter       = reactiveVal(0.024),
@@ -1007,7 +1055,6 @@ server <- function(input, output, session) {
   make_length_observer("rail_length",        si$rail_length)
   make_speed_observer( "wind_speed_val",     si$wind_speed)
   
-  # ── Motor data ─────────────────────────────────────────────────────────────
   motor_data <- reactive({
     if (!is.null(input$motor_file)) {
       tryCatch(parse_thrust_input(input$motor_file, NULL), error=function(e) NULL)
@@ -1018,7 +1065,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # ── Aero (dry rocket geometry) ─────────────────────────────────────────────
   aero_reactive <- reactive({
     if (!all(sapply(list(input$nose_type, input$fin_count), isTruthy))) return(NULL)
     if (!all(sapply(list(si$nose_length(), si$body_length(), si$diameter(),
