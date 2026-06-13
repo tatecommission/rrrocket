@@ -748,11 +748,7 @@ ui <- tagList(
                column(7,
                       plotOutput("thrust_curve_plot", height="400px"),
                       br(),
-                      tags$img(src="fin_diagram.jpg", style="width:60%;border-radius:6px;border:1px solid #fc913a44;"),
-                      p(style="color:#eae374aa;font-size:0.65rem;margin-top:6px;",
-                        tags$a(href="https://www.apogeerockets.com/Peak-of-Flight/Newsletter615",
-                               target="_blank", style="color:#D3D3D3;", "John K. Bennett; Apogee Peak of Flight Issue #615")
-                      )
+                      plotOutput("fin_preview", height = "380px")
                )
              )
     ),
@@ -796,7 +792,7 @@ ui <- tagList(
                                          "display:flex;align-items:center;justify-content:center;",
                                          "height:500px;color:#fc913a44;font-size:0.85rem;",
                                          "text-transform:uppercase;letter-spacing:2px;"
-                                       ), "▶  Press Simulate to run a flight")
+                                       ), ">  Press Simulate to run a flight")
                       )
                )
              ),
@@ -897,7 +893,8 @@ ui <- tagList(
                "background:rgba(252,145,58,0.1);",
                "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset,0 2px 5px rgba(0,0,0,0.4);",
                "display:inline-block;"
-             ), "<GitHub>")
+             ), "<GitHub>"
+             )
     )
   )
 )
@@ -1036,15 +1033,8 @@ server <- function(input, output, session) {
       error=function(e) NULL)
   })
   
-  # ── Aero with loaded CG (motor installed) ──────────────────────────────────
-  # The motor contributes two distinct mass components:
-  #   • casing_mass  — hardware that is on board for the entire flight
-  #   • prop_mass    — propellant that burns away; starts at full, ends at 0
-  # Both sit at cg_motor (geometric center of the motor).
-  # "Loaded" stability uses the full motor mass (casing + propellant) — worst case for
-  # CP margin because this is the heaviest/most-aft CG the rocket will ever have.
-  # "Burnout" stability uses casing only — often the most critical for stability
-  # because prop mass is gone but CG has moved forward (lighter motor end).
+  #LOADED PHYSICS
+  # loaded stab uses the full motor mass, burnout stab uses casing only
   aero_loaded <- reactive({
     aero <- aero_reactive(); if (is.null(aero)) return(NULL)
     td   <- motor_data()
@@ -1102,7 +1092,6 @@ server <- function(input, output, session) {
     )
   })
   
-  # ── Thrust curve plot ──────────────────────────────────────────────────────
   output$thrust_curve_plot <- renderPlot({
     tc <- motor_data()$thrust_curve
     if (is.null(tc) || nrow(tc) == 0) return(
@@ -1122,15 +1111,15 @@ server <- function(input, output, session) {
       geom_line(color="#1a56db", linewidth=1) +
       geom_hline(yintercept=0, color="#e8eaf0") +
       annotate("text", x=max(tc2$time), y=max(tc2$thrust),
-               label=t_ann, hjust=1, vjust=1.3, size=3.5, fontface="bold", color="#111928") +
+               label=t_ann, hjust=1, vjust=1.3, size=3.5, color="#f5f6f8") +
       annotate("text", x=max(tc2$time), y=max(tc2$thrust)*0.87,
-               label=p_ann, hjust=1, vjust=1.3, size=3.5, color="#6b7280") +
+               label=p_ann, hjust=1, vjust=1.3, size=3.5, color="#f5f6f8") +
       scale_y_continuous(limits=c(0, max(tc2$thrust)*1.18)) +
       labs(x="time (s)", y=ylab, title="Engine thrust vs. time") +
       theme_plot()
   })
   
-  # ── Simulate ───────────────────────────────────────────────────────────────
+  # simulation (single)
   observeEvent(input$run, {
     aero   <- aero_reactive()
     parsed <- motor_data()
@@ -1226,8 +1215,8 @@ server <- function(input, output, session) {
     cat(sprintf("max Mach           %.3f\n",         max(r$mach)))
     cat(sprintf("time to apogee     %.2f s\n",       r$time[which.max(r$altitude)]))
     cat(sprintf("total flight time  %.2f s\n",       max(r$time)))
-    # r$stability_margin is the live SM at each timestep; first value = at ignition (loaded),
-    # last powered value ≈ burnout SM. min() gives the worst-case across the whole flight.
+    # r$stability_margin is the live stability margin at each timestep. first value is at ignition (fully loaded),
+    # last powered value ≈ burnout SM. min() gives the worst-case SM across the whole flight.
     cat(sprintf("SM at ignition     %.2f cal\n",     r$stability_margin[1]))
     cat(sprintf("SM at burnout      %.2f cal\n",     r$stability_margin[which.min(abs(r$time - max(r$time[r$time <= res$burn_time])))]))
     cat(sprintf("SM minimum         %.2f cal\n",     min(r$stability_margin)))
@@ -1238,13 +1227,150 @@ server <- function(input, output, session) {
     cat(sprintf("  base             %.4f\n",         ae$Cd_base))
   })
   
+  output$fin_preview <- renderPlot({
+    root  <- si$fin_root()
+    tip   <- si$fin_tip()
+    span  <- si$fin_span()
+    sweep <- si$fin_sweep()
+    diam  <- si$diameter()
+    
+    req(isTruthy(root) && root > 0,
+        isTruthy(tip)  && tip  >= 0,
+        isTruthy(span) && span > 0,
+        isTruthy(sweep)&& sweep >= 0,
+        isTruthy(diam) && diam > 0)
+    
+    du  <- if (isTruthy(input$fin_root_unit)) input$fin_root_unit else "mm"
+    fmt <- function(v) sprintf("%.1f %s", from_meters(v, du), du)
+    
+    body_r <- diam / 2
+    bx     <- -body_r
+    
+    # fin vertices: x = outward (span), y = axial (aft = positive)
+    # y=0 is at the nose-side (leading) edge of the root chord
+    rx1 <- 0;    ry1 <- 0
+    rx2 <- 0;    ry2 <- root
+    tx1 <- span; ty1 <- sweep
+    tx2 <- span; ty2 <- sweep + tip
+    
+    fin_df <- data.frame(
+      x = c(rx1, tx1, tx2, rx2),
+      y = c(ry1, ty1, ty2, ry2)
+    )
+    
+    pad_x    <- span * 0.55
+    pad_y    <- max(root, sweep + tip) * 0.32
+    xlim     <- c(bx - body_r * 0.3, span + pad_x)
+    ylim     <- c(-pad_y, max(root, sweep + tip) + pad_y)
+    
+    off_root <- -span * 0.1
+    off_tip  <-  span * 0.05
+    off_span <-  max(root, sweep + tip) * 0.18
+    
+    ann_col  <- "#fff8f0"
+    fin_fill <- "#eae37433"
+    fin_col  <- "#f9d62e"
+    body_col <- "#3a2510"
+    dim_col  <- "#1a56db"
+    txt_col  <- "#fff8f0"
+    
+    p <- ggplot() +
+      
+      # body tube rect
+      annotate("rect",
+               xmin = bx, xmax = 0,
+               ymin = -pad_y * 0.6, ymax = max(root, sweep + tip) + pad_y * 0.6,
+               fill = body_col, color = "#eae374aa", linewidth = 0.6) +
+      
+      # fin polygon
+      geom_polygon(data = fin_df, aes(x = x, y = y),
+                   fill = fin_fill, color = fin_col, linewidth = 1.2) +
+      
+      # ROOT CHORD — double-headed arrow left of body wall
+      annotate("segment",
+               x = off_root, xend = off_root, y = ry1, yend = ry2,
+               color = dim_col, linewidth = 0.7,
+               arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
+      annotate("segment", x = off_root - span*0.03, xend = off_root + span*0.01,
+               y = ry1, yend = ry1, color = dim_col, linewidth = 0.5) +
+      annotate("segment", x = off_root - span*0.03, xend = off_root + span*0.01,
+               y = ry2, yend = ry2, color = dim_col, linewidth = 0.5) +
+      annotate("text",
+               x = off_root - span * 0.06, y = (ry1 + ry2) / 2,
+               label = paste0("root\n", fmt(root)),
+               color = txt_col, size = 3.1, hjust = 1, fontface = "bold") +
+      
+      # TIP CHORD — right of fin tip
+      annotate("segment",
+               x = span + off_tip, xend = span + off_tip, y = ty1, yend = ty2,
+               color = dim_col, linewidth = 0.7,
+               arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
+      annotate("segment", x = span + off_tip - span*0.01, xend = span + off_tip + span*0.04,
+               y = ty1, yend = ty1, color = dim_col, linewidth = 0.5) +
+      annotate("segment", x = span + off_tip - span*0.01, xend = span + off_tip + span*0.04,
+               y = ty2, yend = ty2, color = dim_col, linewidth = 0.5) +
+      annotate("text",
+               x = span + off_tip + span * 0.06, y = (ty1 + ty2) / 2,
+               label = paste0("tip\n", fmt(tip)),
+               color = txt_col, size = 3.1, hjust = 0, fontface = "bold") +
+      
+      # SEMI-SPAN — horizontal arrow below fin
+      annotate("segment",
+               x = 0, xend = span, y = -off_span, yend = -off_span,
+               color = dim_col, linewidth = 0.7,
+               arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
+      annotate("segment", x = 0,    xend = 0,
+               y = -off_span*0.6, yend = -off_span*0.6, color = dim_col, linewidth = 0.5) +
+      annotate("segment", x = span, xend = span,
+               y = -off_span*0.6, yend = -off_span*0.6, color = dim_col, linewidth = 0.5) +
+      annotate("text",
+               x = span / 2, y = -off_span - 0.0024,
+               label = paste0("semi-span  ", fmt(span)),
+               color = txt_col, size = 3.1, hjust = 0.5, fontface = "bold") +
+      
+      # SWEEP — only if sweep > 0 (guard against zero-sweep fins)
+      { if (sweep > 1e-5) list(
+        annotate("segment",
+                 x = span + off_tip, xend = span + off_tip, y = ry1, yend = ty1,
+                 color = dim_col, linewidth = 0.6,
+                 arrow = arrow(ends = "both", length = unit(4, "pt"), type = "closed")),
+        annotate("segment",
+                 x = rx1, xend = tx1, y = ty1, yend = ty1,
+                 color = dim_col, linewidth = 0.4, linetype = "dotted"),
+        annotate("segment",
+                 x = tx1, xend = tx1, y = ry1, yend = ty1,
+                 color = dim_col, linewidth = 0.4, linetype = "dotted"),
+        annotate("text",
+                 x = span * 1.13, y = sweep * 0.3,
+                 label = paste0("sweep\n", fmt(sweep)),
+                 color = ann_col, size = 2.9, hjust = 0, fontface = "bold")
+      ) else list() } +
+      
+      # BODY WALL label
+      annotate("text",
+               x = bx / 2, y = max(root, sweep + tip) + pad_y * 0.7,
+               label = "body wall",
+               color = "#eae374aa", size = 2.6, hjust = 0.5) +
+      
+      scale_x_continuous(expand = expansion(0)) +
+      scale_y_continuous(expand = expansion(0)) +
+      coord_fixed(xlim = xlim, ylim = ylim) +
+      labs(title = "Fin preview", x = NULL, y = NULL) +
+      theme_plot() +
+      theme(axis.text  = element_blank(),
+            axis.ticks = element_blank(),
+            panel.grid = element_blank())
+    
+    p
+  }, bg = "#120800")
+  
   output$altitude_plot <- renderPlot({
     res <- results_store(); req(!is.null(res)); r <- res$sim
     alt  <- if (use_metric()) r$altitude else r$altitude * m_to_ft
     ylab <- if (use_metric()) "altitude (m)" else "altitude (ft)"
     ggplot(data.frame(t=r$time, alt=alt), aes(t, alt)) +
-      geom_area(fill="#fc913a", alpha=0.15) +
-      geom_line(color="#fc913a", linewidth=1) +
+      geom_area(fill="#1a56db", alpha=0.15) +
+      geom_line(color="#1a56db", linewidth=1) +
       geom_hline(yintercept=0, color="#e8eaf0") +
       labs(x="time (s)", y=ylab, title="Altitude") + theme_plot()
   })
@@ -1288,7 +1414,6 @@ server <- function(input, output, session) {
       cat(sprintf("%.1f%% of rockets land in the polygon\n", landing_pct_val()))
   })
   
-  # ── Map ────────────────────────────────────────────────────────────────────
   launch_point  <- reactiveVal(list(lat=38.89, lng=-77.03))
   drawn_polygon <- reactiveVal(NULL)
   
@@ -1324,7 +1449,7 @@ server <- function(input, output, session) {
     poly_mat    <- do.call(rbind, lapply(poly_coords, function(p) c(p[[1]], p[[2]])))
     if (!identical(poly_mat[1,], poly_mat[nrow(poly_mat),]))
       poly_mat <- rbind(poly_mat, poly_mat[1,])
-    # Point-in-polygon (ray-casting):
+    # point in polygon <- pip
     pip <- function(px, py, pm) sapply(seq_along(px), function(k) {
       x<-px[k]; y<-py[k]; n<-nrow(pm); j<-n; inside<-FALSE
       for (i in 1:n) {
