@@ -19,6 +19,35 @@ Cd_chute <- 0.80 # from OpenRocket
 m_to_ft  <- 3.28084
 N_to_lbf <- 0.224809
 
+#unit conversions
+to_meters <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit, "mm"=val/1000, "cm"=val/100, "in"=val*0.0254,
+         "ft"=val*0.3048, "m"=val, val/1000)
+}
+to_kg <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit, "g"=val/1000, "oz"=val*0.0283495,
+         "kg"=val, "lb"=val*0.453592, val/1000)
+}
+to_ms <- function(val, unit) {
+  if (!isTruthy(val)) return(0)
+  switch(unit, "m/s"=val, "mph"=val*0.44704,
+         "km/h"=val/3.6, "knots"=val*0.514444, val)
+}
+from_meters <- function(si, unit) {
+  switch(unit, "mm"=si*1000, "cm"=si*100, "in"=si/0.0254,
+         "ft"=si/0.3048, "m"=si, si*1000)
+}
+from_kg <- function(si, unit) {
+  switch(unit, "g"=si*1000, "oz"=si/0.0283495,
+         "kg"=si, "lb"=si/0.453592, si*1000)
+}
+from_ms <- function(si, unit) {
+  switch(unit, "m/s"=si, "mph"=si/0.44704,
+         "km/h"=si*3.6, "knots"=si/0.514444, si)
+}
+
 # only troposphere
 isa_atm <- function(z) {
   z   <- max(z, 0)
@@ -681,7 +710,7 @@ ui <- tagList(
                                   unit_input("dry_mass_val", "Dry mass",           90,  "g",  unit_choices_mass),
                                   unit_input("diameter",     "Body tube diameter", 24,  "mm", unit_choices_length),
                                   unit_input("body_length",  "Body tube length",   300, "mm", unit_choices_length),
-                                  unit_input("cg_measured",  "CG from nose tip",   220, "mm", unit_choices_length)
+                                  unit_input("cg_measured",  "CG from nose tip (unloaded)",   220, "mm", unit_choices_length)
                         ),
                         nav_panel("Nosecone",
                                   selectInput("nose_type","Nosecone type", choices=c("ogive","conical","parabolic")),
@@ -1112,7 +1141,7 @@ server <- function(input, output, session) {
         parsed$thrust_curve, parsed$prop_mass, si$dry_mass(),
         parsed$casing_mass,
         si$diameter(), max(si$parachute_diam(), 0.05), input$parachute_delay,
-        aero$Cd, aero$CNa_total, aero$CP, input$precision,
+        aero$Cd_parasite, aero$CNa_total, aero$CP, input$precision,
         si$wind_speed(), input$wind_dir,
         si$cg_measured(), si$nose_length(), si$body_length(),
         parsed$motor_length_m, si$rail_length(),
@@ -1147,7 +1176,7 @@ server <- function(input, output, session) {
             parsed$casing_mass,   # casing mass is fixed — no uncertainty here
             si$diameter(), max(si$parachute_diam(), 0.05),
             max(0, rnorm(1, input$parachute_delay, input$chute_delay_std_dev)),
-            aero$Cd * rnorm(1, 1, 0.01*input$cd_std_dev),
+            aero$Cd_parasite * rnorm(1, 1, 0.01*input$cd_std_dev),
             aero$CNa_total, aero$CP, input$montecarlo_precision,
             max(0, rnorm(1, si$wind_speed(), 0.01*si$wind_speed()*input$wind_speed_std_dev)),
             rnorm(1, input$wind_dir, input$wind_dir_std_dev),
