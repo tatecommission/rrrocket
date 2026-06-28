@@ -1501,23 +1501,51 @@ server <- function(input, output, session) {
       )
     }
     
+    # invisible anchor point — only the floor projection shows
     fig <- fig |>
       add_trace(
         x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
-        type = "scatter3d",
-        mode = "markers",
+        type = "scatter3d", mode = "markers",
         name = "Landing",
-        marker = list(
-          color   = "#fc913a",
-          size    = 4,
-          symbol  = "circle-open",
-          opacity = 0.55,
-          line    = list(color = "#fc913a", width = 1.5)
-        ),
+        marker = list(color = "#e02424", size = 7, symbol = "circle", opacity = 0),
         projection = list(
-          z = list(show = TRUE, opacity = 0.6, scale = 0.8)
+          z = list(show = TRUE, opacity = 1, scale = 1)
         ),
         showlegend = TRUE
+      ) |>
+      # outer white ring
+      add_trace(
+        x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
+        type = "scatter3d", mode = "markers",
+        name = "Landing",
+        marker = list(
+          color   = "rgba(0,0,0,0)",
+          size    = 14,
+          symbol  = "circle-open",
+          opacity = 0,
+          line    = list(color = "#ffffff", width = 2)
+        ),
+        projection = list(
+          z = list(show = TRUE, opacity = 1, scale = 1)
+        ),
+        showlegend = FALSE
+      ) |>
+      # inner red filled dot
+      add_trace(
+        x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
+        type = "scatter3d", mode = "markers",
+        name = "Landing",
+        marker = list(
+          color   = "rgba(0,0,0,0)",
+          size    = 5,
+          symbol  = "circle",
+          opacity = 0,
+          line    = list(color = "#e02424", width = 0)
+        ),
+        projection = list(
+          z = list(show = TRUE, opacity = 1, scale = 1)
+        ),
+        showlegend = FALSE
       ) |> 
       layout(
         paper_bgcolor = "#120800",
