@@ -1,6 +1,6 @@
 # RRRocket 3D
 
-RRRocket 3D is a model rocket flight simulator built in R Shiny. The goal is a tool that is both physically honest and easy enough to use that you do not need an engineering background to get something meaningful out of it.
+RRRocket 3D is a cutting-edge model rocket flight simulator built in R Shiny. It is entirely web-based and lightweight yet still capable of predicting complex trajectories with great accuracy.
 
 ## What makes it different
 
