@@ -201,7 +201,9 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
                                  motor_length_m, rail_length_m,
                                  launch_bearing_deg, launch_angle_deg,
                                  cd_scale    = 1.0,
-                                 landing_only = FALSE) {
+                                 landing_only = FALSE,
+                                 wind_turbulence_intensity = 15,
+                                 gust_duration = 2) {
   
   if (is.null(thrust_curve) || nrow(thrust_curve) == 0) return(NULL)
   
@@ -258,7 +260,8 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
       vy               = numeric(max_steps),
       vz               = numeric(max_steps),
       mach             = numeric(max_steps),
-      stability_margin = numeric(max_steps)
+      stability_margin = numeric(max_steps),
+      phase            = integer(max_steps)   # 1=boost, 2=coast, 3=descent
     )
     i <- 1L
   }
@@ -277,8 +280,8 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
     mu_x             <- -wind_speed_ref * shear * sin(wd_rad)
     mu_y             <- -wind_speed_ref * shear * cos(wd_rad)
     local_wind_speed <- wind_speed_ref * shear
-    sigma_w          <- (0.01 * input$wind_turbulence_intensity) * local_wind_speed
-    alpha <- 1 / input$gust_duration
+    sigma_w <- (0.01 * wind_turbulence_intensity) * local_wind_speed
+    alpha <- 1 / gust_duration
     wx <- wx + alpha * (mu_x - wx) * dt + sigma_w * sqrt(dt) * rnorm(1)
     wy <- wy + alpha * (mu_y - wy) * dt + sigma_w * sqrt(dt) * rnorm(1)
     
@@ -363,6 +366,7 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
       out$vz[i]               <- vz
       out$mach[i]             <- M
       out$stability_margin[i] <- sm_live
+      out$phase[i] <- if (t <= burn_time) 1L else if (!chute_open) 2L else 3L
       i <- i + 1L
     }
     
@@ -765,7 +769,8 @@ ui <- tagList(
                                   unit_input("wind_speed_val", "Wind speed at 10m", 3, "m/s", unit_choices_speed),
                                   p("Match wind speed to a weather station reading. For simulation purposes, wind speed increases with altitude per 1/7 power law."),
                                   sliderInput("wind_dir","Wind from (° CW from N)", min=0, max=360, value=270),
-                                  sliderInput("wind_turbulence_intensity (%)", "Wind Turbulence Intensity (15% recommended)", min = 10, max = 50, value = 15),
+                                  sliderInput("wind_turbulence_intensity", "Wind Turbulence Intensity (15% recommended)", 
+                                              min = 10, max = 50, value = 15),
                                   sliderInput("gust_duration", "Mean gust duration (s)", min = 0.5, max = 10, value = 2, step = 0.5),
                         ),
                         nav_panel("Launch Site",
@@ -1193,7 +1198,9 @@ server <- function(input, output, session) {
         si$cg_measured(), si$nose_length(), si$body_length(),
         parsed$motor_length_m, si$rail_length(),
         input$launch_bearing, input$launch_angle,
-        landing_only=FALSE),
+        landing_only = FALSE,
+        wind_turbulence_intensity = input$wind_turbulence_intensity,
+        gust_duration = input$gust_duration),
       error=function(e) { showNotification(paste("Sim error:", e$message), type="error"); NULL })
     if (is.null(sim)) return()
     res  <- list(sim=sim, aero=aero,
@@ -1232,7 +1239,9 @@ server <- function(input, output, session) {
             input$launch_bearing,
             max(0, rnorm(1, input$launch_angle, input$launch_angle_std_dev)),
             cd_scale     = rnorm(1, 1, 0.01 * input$cd_std_dev),
-            landing_only=TRUE
+            landing_only = TRUE,
+            wind_turbulence_intensity = input$wind_turbulence_intensity,
+            gust_duration = input$gust_duration
             ),
           error=function(e) NULL)
         landings[[i]] <- if (!is.null(sim)) data.frame(x=sim$x, y=sim$y) else data.frame(x=0, y=0)
