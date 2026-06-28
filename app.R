@@ -1460,27 +1460,74 @@ server <- function(input, output, session) {
     xl <- if (use_metric()) "East (m)"     else "East (ft)"
     yl <- if (use_metric()) "North (m)"    else "North (ft)"
     zl <- if (use_metric()) "Altitude (m)" else "Altitude (ft)"
-    plot_ly(r, x=~x*sc, y=~y*sc, z=~altitude*sc, type="scatter3d", mode="lines",
-            line=list(color=~altitude*sc,
-                      colorscale=list(c(0,"#1a56db"), c(1,"#60a5fa")), width=3)) |>
-      add_trace(x=tail(r$x,1)*sc, y=tail(r$y,1)*sc, z=0, type="scatter3d", mode="markers",
-                marker=list(color="#e02424", size=5), name="landing") |>
-      layout(paper_bgcolor="#ffffff", font=list(color="#111928"),
-             scene=list(bgcolor="#f8f9fb",
-                        xaxis=list(title=xl, gridcolor="#d0d5de"),
-                        yaxis=list(title=yl, gridcolor="#d0d5de"),
-                        zaxis=list(title=zl, gridcolor="#d0d5de")))
-  })
-  
-  output$landing_pct <- renderPrint({
-    lc <- mc_store(); req(!is.null(lc))
-    sc <- if (use_metric()) 1 else m_to_ft
-    u  <- if (use_metric()) "m" else "ft"
-    drift <- sqrt(lc$x^2 + lc$y^2) * sc
-    cat(sprintf("95th pct distance from pad: %.0f %s\n", quantile(drift, 0.95), u))
-    cat(sprintf("Max distance from pad:      %.0f %s\n", max(drift), u))
-    if (!is.null(landing_pct_val()))
-      cat(sprintf("%.1f%% of rockets land in the polygon\n", landing_pct_val()))
+    
+    phase_colors <- c("1" = "#ff4e50", "2" = "#f9d62e", "3" = "#e2f4c7")
+    phase_names  <- c("1" = "Boost",   "2" = "Coast",   "3" = "Descent")
+    
+    # Split into contiguous phase segments so lines don't cross-color
+    # Add a segment ID that increments whenever phase changes
+    r$segment <- cumsum(c(1, diff(r$phase) != 0))
+    
+    traces <- lapply(unique(r$segment), function(seg) {
+      d     <- r[r$segment == seg, ]
+      ph    <- as.character(d$phase[1])
+      # extend one row into next segment to avoid gaps between traces
+      next_row <- r[r$segment == seg + 1, ]
+      if (nrow(next_row) > 0) d <- rbind(d, next_row[1, ])
+      list(
+        x    = d$x * sc,
+        y    = d$y * sc,
+        z    = d$altitude * sc,
+        col  = phase_colors[ph],
+        name = phase_names[ph],
+        ph   = ph
+      )
+    })
+    
+    # Build plot with first trace, then add remaining
+    fig <- plot_ly(type = "scatter3d", mode = "lines")
+    
+    seen_phases <- character(0)
+    for (tr in traces) {
+      show_legend <- !(tr$ph %in% seen_phases)
+      seen_phases <- union(seen_phases, tr$ph)
+      fig <- fig |> add_trace(
+        x = tr$x, y = tr$y, z = tr$z,
+        type      = "scatter3d",
+        mode      = "lines",
+        name      = tr$name,
+        showlegend = show_legend,
+        line      = list(color = tr$col, width = 4)
+      )
+    }
+    
+    fig <- fig |>
+      add_trace(
+        x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
+        type      = "scatter3d",
+        mode      = "markers",
+        name      = "Landing",
+        marker    = list(color = "#fc913a", size = 6, symbol = "x"),
+        showlegend = TRUE
+      ) |>
+      layout(
+        paper_bgcolor = "#120800",
+        font  = list(color = "#f9d62e", family = "Lexend, sans-serif"),
+        legend = list(
+          bgcolor     = "rgba(26,16,8,0.85)",
+          bordercolor = "#fc913a44",
+          borderwidth = 1,
+          font        = list(color = "#eae374", size = 11)
+        ),
+        scene = list(
+          bgcolor = "#1a0a02",
+          xaxis   = list(title = xl, gridcolor = "#3a2010", color = "#eae374"),
+          yaxis   = list(title = yl, gridcolor = "#3a2010", color = "#eae374"),
+          zaxis   = list(title = zl, gridcolor = "#3a2010", color = "#eae374")
+        )
+      )
+    
+    fig
   })
   
   launch_point  <- reactiveVal(list(lat=38.89, lng=-77.03))
