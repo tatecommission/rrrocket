@@ -1504,12 +1504,21 @@ server <- function(input, output, session) {
     fig <- fig |>
       add_trace(
         x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
-        type      = "scatter3d",
-        mode      = "markers",
-        name      = "Landing",
-        marker    = list(color = "#fc913a", size = 6, symbol = "x"),
+        type = "scatter3d",
+        mode = "markers",
+        name = "Landing",
+        marker = list(
+          color   = "#fc913a",
+          size    = 4,
+          symbol  = "circle-open",
+          opacity = 0.55,
+          line    = list(color = "#fc913a", width = 1.5)
+        ),
+        projection = list(
+          z = list(show = TRUE, opacity = 0.6, scale = 0.8)
+        ),
         showlegend = TRUE
-      ) |>
+      ) |> 
       layout(
         paper_bgcolor = "#120800",
         font  = list(color = "#f9d62e", family = "Lexend, sans-serif"),
