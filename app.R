@@ -4,22 +4,43 @@ library(plotly)
 library(ggplot2)
 library(leaflet)
 library(leaflet.extras)
-# landing_only is for mc only to save computational complexity on 200+ runs, only computes landing x, y
+library(jsonlite)
+library(xml2)
+
+# =============================================================================
+# RRRocket 3D
+#
+# Physics modeled on:
+#   Niskanen, S. (2013). OpenRocket technical documentation, v13.05.
+#   Barrowman, J. (1967). The Practical Calculation of the Aerodynamic
+#     Characteristics of Slender Finned Vehicles.
+#   Hoerner, S. (1965). Fluid-Dynamic Drag.
+#
+# Equation numbers below (eq. 3.xx / 4.xx / B.x) refer to Niskanen 2013.
+#
+# Integration: Runge-Kutta 4 (eq. 4.20-4.21).
+# Rotational model: pitch-plane rigid body. State carries the body axis unit
+#   vector and the angular velocity vector, so angle of attack, weathercocking,
+#   gravity turn and divergence of unstable rockets all EMERGE from the
+#   normal force acting at the CP rather than being applied as a heuristic.
+# =============================================================================
+
 unit_choices_length <- c("mm", "cm", "in", "ft", "m")
 unit_choices_mass   <- c("g", "oz", "kg", "lb")
 unit_choices_speed  <- c("m/s", "mph", "km/h", "knots")
 
-# modeled off of OpenRocket technical documentation
-# Nisanken 2013, Barrowman 1967
-
 g0      <- 9.80665
 R_air   <- 287.058
 gamma_a <- 1.4
-Cd_chute <- 0.80
+Cd_chute <- 0.80          # Hoerner parachute Cd (Niskanen sec. 4.2.5)
 m_to_ft  <- 3.28084
 N_to_lbf <- 0.224809
 
-#unit conversions
+# Safety thresholds
+V_DEPLOY_WARN <- 20       # m/s -- deployment above this risks a zippered tube
+V_RAIL_WARN   <- 15       # m/s -- minimum safe rail-exit speed
+
+# ---- unit conversions -------------------------------------------------------
 to_meters <- function(val, unit) {
   if (!isTruthy(val)) return(0)
   switch(unit, "mm"=val/1000, "cm"=val/100, "in"=val*0.0254,
@@ -48,50 +69,49 @@ from_ms <- function(si, unit) {
          "km/h"=si*3.6, "knots"=si/0.514444, si)
 }
 
-# ISA troposphere 
+# ---- small vector helpers ---------------------------------------------------
+cross3 <- function(a, b) c(a[2]*b[3]-a[3]*b[2],
+                           a[3]*b[1]-a[1]*b[3],
+                           a[1]*b[2]-a[2]*b[1])
+vnorm  <- function(a) sqrt(sum(a*a))
+unitv  <- function(a) { n <- vnorm(a); if (n < 1e-12) c(0,0,1) else a/n }
+
+# ---- ISA troposphere (Niskanen sec. 4.1.1) ----------------------------------
 isa_atm <- function(z) {
   z   <- max(z, 0)
-  T   <- 288.15 - 0.0065 * z # T for temperature
-  rho <- 1.225 * (T / 288.15)^4.2561 # air density in kg/m^3
+  T   <- 288.15 - 0.0065 * z
+  rho <- 1.225 * (T / 288.15)^4.2561
   list(rho = rho, a = sqrt(gamma_a * R_air * T))
 }
 
-
-#SKIN FRICTION against all body surfaces
-#Cf depends on how turbulent the boundary layer is (Reynolds number, which in turn depends on velocity etc) and roughness of surface
-#Mach correction accounts for boundary-layer heating at speed
-
+# ---- Skin friction (eqs. 3.78-3.84) -----------------------------------------
+# Fully turbulent boundary layer assumed (Niskanen sec. 3.4.1).
 skin_friction_cf <- function(velocity, char_length, mach, Rs = 60e-6) {
-  nu    <- 1.461e-5  # kinematic viscosity, air at 15°C
+  nu    <- 1.461e-5
   Re    <- max(velocity * char_length / nu, 1)
-  Rcrit <- 51 * (Rs / char_length)^(-1.039) # roughness transition, eq. 3.79 from Barrowman
+  Rcrit <- 51 * (Rs / char_length)^(-1.039)      # eq. 3.79
   
   Cf <- if (Re < 1e4) {
-    1.48e-2
+    1.48e-2                                       # eq. 3.81 low-Re floor
   } else if (Re < Rcrit) {
-    1 / (1.50 * log(Re) - 5.6)^2
+    1 / (1.50 * log(Re) - 5.6)^2                  # eq. 3.78
   } else {
-    0.032 * (Rs / char_length)^0.2
+    0.032 * (Rs / char_length)^0.2                # eq. 3.80
   }
   
   if (mach < 1.0) {
-    Cf_c <- Cf * (1.0 - 0.1 * mach^2)
+    Cf_c <- Cf * (1.0 - 0.1 * mach^2)             # eq. 3.82
   } else {
-    Cf_c <- Cf / (1.0 + 0.15 * mach^2)^0.58
+    Cf_c <- Cf / (1.0 + 0.15 * mach^2)^0.58       # eq. 3.83
     if (Re >= Rcrit) {
+      # eq. 3.84, never below the turbulent value
       Cf_c <- max(Cf_c, Cf / (1.0 + 0.18 * mach^2))
     }
   }
-  
   Cf_c
 }
 
-
-# Nose pressure drag depends on nosecone type and geometry and Mach#
-#   M < 0.8 : Prandtl-Glauert compressibility correction
-#   0.8-1.0 : transonic ramp, peaks at 2.4x at M=1 where shock waves form
-#   1.0-2.0 : supersonic decay to 1.6x at M=2 as flow stabilizes
-#   M >= 2.0: approximately constant at 1.6x
+# ---- Nose pressure drag Mach scaling ----------------------------------------
 mach_cd_factor <- function(M) {
   if      (M < 0.8) 1 / sqrt(max(1 - M^2, 0.01))
   else if (M < 1.0) 1.6667 + 3.6667 * (M - 0.8)
@@ -99,46 +119,119 @@ mach_cd_factor <- function(M) {
   else              1.6
 }
 
-#BASE DRAG
-#Low-pressure vacuum right below the rocket, depends on Mach and other variables, largest for M=1
+# ---- Base drag (eq. 3.94) ---------------------------------------------------
 live_base_drag <- function(M) {
   if (M < 1.0) 0.12 + 0.13 * M^2
   else         0.25 / M
 }
 
+# ---- Stagnation pressure coefficient (eqs. B.1, B.2) ------------------------
+# Used for launch-lug / rail-pin parasitic drag.
+cd_stag <- function(M) {
+  qratio <- if (M < 1) {
+    1 + M^2/4 + M^4/40
+  } else {
+    1.84 - 0.76/M^2 + 0.166/M^4 + 0.035/M^6
+  }
+  0.85 * qratio
+}
 
-#AERODYNAMICS
-# Three drag components computed separately at each Mach
-# Nose pressure drag is scaled by mach_cd_factor() each dt, Skin friction drag with separate Mach correction, base drag with live_base_drag()
+# ---- Angle-of-attack axial drag scaling (Niskanen sec. 3.4.7) ---------------
+# 1.0 at 0 deg, 1.3 at 17 deg, 0 at 90 deg; zero derivative at all three.
+# Implemented as two smoothstep segments, which satisfies exactly those
+# constraints and is monotone (no polynomial overshoot).
+aoa_drag_factor <- function(alpha_rad) {
+  a <- abs(alpha_rad)
+  a <- min(a, pi - a)                 # symmetric: tail-first behaves like nose-first
+  deg <- a * 180 / pi
+  smooth <- function(t) { t <- min(max(t, 0), 1); 3*t^2 - 2*t^3 }
+  if (deg <= 17) {
+    1 + 0.3 * smooth(deg / 17)
+  } else {
+    1.3 * (1 - smooth((deg - 17) / (90 - 17)))
+  }
+}
+
+# ---- Fin-fin interference (eq. 3.54) ----------------------------------------
+fin_interference <- function(N) {
+  if      (N <= 4) 1.000
+  else if (N == 5) 0.948
+  else if (N == 6) 0.913
+  else if (N == 7) 0.862      # interpolated between N=6 and N=8
+  else if (N == 8) 0.810
+  else             0.750
+}
+
+# ---- Transonic fin CP position (eqs. 3.35-3.36) -----------------------------
+# Supersonic limit, M > 2:  Xf/cbar = (A*beta - 0.67) / (2*A*beta - 1)
+fin_cp_super  <- function(M, A) { b <- sqrt(M^2 - 1); (A*b - 0.67) / (2*A*b - 1) }
+fin_cp_super_d <- function(M, A) {
+  b <- sqrt(M^2 - 1)
+  0.34 * A / (2*A*b - 1)^2 * (M / b)
+}
+# Quintic p(M) on [0.5, 2] with the six constraints of eq. 3.36:
+#   p(0.5)=0.25, p'(0.5)=0, p(2)=f(2), p'(2)=f'(2), p''(2)=0, p'''(2)=0
+fin_cp_poly <- function(A) {
+  M0 <- 0.5; M1 <- 2
+  rv  <- function(M) M^(0:5)
+  rd1 <- function(M) c(0, 1, 2*M, 3*M^2, 4*M^3, 5*M^4)
+  rd2 <- function(M) c(0, 0, 2, 6*M, 12*M^2, 20*M^3)
+  rd3 <- function(M) c(0, 0, 0, 6, 24*M, 60*M^2)
+  Amat <- rbind(rv(M0), rd1(M0), rv(M1), rd1(M1), rd2(M1), rd3(M1))
+  bvec <- c(0.25, 0, fin_cp_super(M1, A), fin_cp_super_d(M1, A), 0, 0)
+  tryCatch(as.numeric(solve(Amat, bvec)),
+           error = function(e) c(0.25, 0, 0, 0, 0, 0))
+}
+fin_cp_frac <- function(M, A, coefs) {
+  fr <- if (M <= 0.5)      0.25
+  else if (M >= 2.0) fin_cp_super(M, A)
+  else               sum(coefs * M^(0:5))
+  min(max(fr, 0.05), 1.0)   # keep the CP physically on the chord
+}
+
+# =============================================================================
+# GEOMETRY / STATIC AERODYNAMICS
+# Everything Mach-independent is precomputed once here. Mach-dependent
+# quantities (CNa, CP, CD0) are recomputed every RK4 stage by aero_coeffs().
+# =============================================================================
 compute_aero <- function(nose_type, nose_length, body_length,
                          bt_diameter, fin_count, fin_root,
-                         fin_tip, fin_span, fin_sweep, cg_measured,
+                         fin_tip, fin_span, fin_sweep, fin_pos,
+                         cg_measured,
+                         lug_length = 0, lug_od = 0, lug_id = 0,
                          ref_velocity = 50) {
   
   bt_radius <- bt_diameter / 2
   Aref      <- pi * bt_radius^2
+  N         <- fin_count
   
-  # CP calc
+  # --- nose (Barrowman) ---
   Xcp_nose <- switch(nose_type,
                      conical   = (2/3)  * nose_length,
                      ogive     = 0.466  * nose_length,
                      parabolic = 0.5    * nose_length)
   CNa_nose <- 2.0
   
-  Afin_one <- 0.5 * (fin_root + fin_tip) * fin_span
-  Kfb      <- 1 + bt_radius / (fin_span + bt_radius)   # body interference factor
-  CNa_fin  <- Kfb * (4 * fin_count * (fin_span / bt_diameter)^2) /
-    (1 + sqrt(1 + (2 * fin_span / (fin_root + fin_tip))^2))
+  # --- fin planform ---
+  ct_sum   <- fin_root + fin_tip
+  Afin_one <- 0.5 * ct_sum * fin_span                       # one side, one fin
+  A_aspect <- 2 * fin_span^2 / Afin_one                     # eq. 3.35 aspect ratio
+  # Mean aerodynamic chord (eq. 3.30 evaluated for a trapezoid)
+  cbar     <- (2/3) * (fin_root^2 + fin_tip^2 + fin_root*fin_tip) / ct_sum
+  # Leading-edge position of the MAC (eq. 3.32 -> Barrowman's Xt term)
+  xmac_le  <- (fin_sweep / 3) * (fin_root + 2*fin_tip) / ct_sum
+  # Midchord sweep angle, needed by eq. 3.40
+  dx_mid   <- fin_sweep + fin_tip/2 - fin_root/2
+  cosGc    <- fin_span / sqrt(fin_span^2 + dx_mid^2)
   
-  Xb      <- nose_length + body_length
-  Xcp_fin <- Xb +
-    (fin_sweep / 3) * ((fin_root + 2 * fin_tip) / (fin_root + fin_tip)) +
-    (1 / 6) * (fin_root + fin_tip - fin_root * fin_tip / (fin_root + fin_tip))
+  Kfb      <- 1 + bt_radius / (fin_span + bt_radius)        # eq. 3.56
+  fin_int  <- fin_interference(N)                           # eq. 3.54
+  cp_coefs <- fin_cp_poly(A_aspect)
   
-  CNa_total <- CNa_nose + CNa_fin
-  CP        <- (CNa_nose * Xcp_nose + CNa_fin * Xcp_fin) / CNa_total
+  # Static (subsonic) fin CP, also used as the fin lever arm for pitch damping
+  Xcp_fin0 <- fin_pos + xmac_le + 0.25 * cbar               # eq. 3.34
   
-  # nose pressure drag based on shape, btradius, length -> sin-squared formula
+  # --- nose pressure drag ---
   ha <- atan(bt_radius / nose_length)
   Cd_nose_pressure <- switch(nose_type,
                              conical   = 0.8 * sin(ha)^2,
@@ -146,51 +239,218 @@ compute_aero <- function(nose_type, nose_length, body_length,
                              parabolic = 0.3 * (bt_diameter / nose_length)^2)
   
   rocket_length <- nose_length + body_length
-  fB            <- rocket_length / bt_diameter          # fineness ratio
+  fB            <- rocket_length / bt_diameter
   nose_slant    <- sqrt(nose_length^2 + bt_radius^2)
   Awet_nose     <- pi * bt_radius * nose_slant
   Awet_body     <- pi * bt_diameter * body_length
-  Awet_fins     <- 2 * fin_count * Afin_one
-  c_bar_fin     <- (fin_root + fin_tip) / 2             # mean aerodynamic chord
+  Awet_fins     <- 2 * N * Afin_one
   
-  ### BELOW ONLY FOR DISPLAY
-  Cf_ref     <- skin_friction_cf(ref_velocity, rocket_length, mach = 0)
-  Cf_fin_ref <- skin_friction_cf(ref_velocity, c_bar_fin,     mach = 0)
+  # --- launch lug parasitic drag (eqs. 3.95, 3.96) ---
+  if (isTruthy(lug_length) && lug_length > 0 && lug_od > 0) {
+    r_ext <- lug_od / 2
+    r_int <- min(lug_id, lug_od) / 2
+    ld    <- lug_length / lug_od
+    lug_k <- max(1.3 - 0.3 * ld, 1)                                   # eq. 3.95
+    A_lug <- pi*r_ext^2 - pi*r_int^2 * max(1 - ld, 0)                 # eq. 3.96
+  } else {
+    lug_k <- 0; A_lug <- 0
+  }
   
-  Cd_nose_friction_ref <- Cf_ref     * Awet_nose                   / Aref
-  Cd_body_ref          <- Cf_ref     * (1 + 2/fB) * Awet_body      / Aref
-  Cd_fins_ref          <- Cf_fin_ref * Awet_fins                   / Aref
-  Cd_friction_ref      <- Cd_nose_friction_ref + Cd_body_ref + Cd_fins_ref
-  Cd_base_ref          <- 0.12    # Hoerner M=0 limiting value, display only
-  ### ABOVE ONLY FOR DISPLAY
-  
-  #FOR SIMULATION
-  list(
+  aero <- list(
+    nose_type = nose_type, nose_length = nose_length, body_length = body_length,
+    bt_diameter = bt_diameter, bt_radius = bt_radius, Aref = Aref,
+    fin_count = N, fin_root = fin_root, fin_tip = fin_tip,
+    fin_span = fin_span, fin_sweep = fin_sweep, fin_pos = fin_pos,
+    Afin_one = Afin_one, A_aspect = A_aspect, cbar = cbar,
+    xmac_le = xmac_le, cosGc = cosGc, Kfb = Kfb, fin_int = fin_int,
+    cp_coefs = cp_coefs, Xcp_fin0 = Xcp_fin0,
+    CNa_nose = CNa_nose, Xcp_nose = Xcp_nose,
     Cd_nose_pressure = Cd_nose_pressure,
-    Awet_nose        = Awet_nose,   
-    Awet_body        = Awet_body,       
-    Awet_fins        = Awet_fins, 
-    Aref             = Aref, 
-    fB               = fB,         
-    rocket_length    = rocket_length,
-    c_bar_fin        = c_bar_fin,      
-    CNa_total        = CNa_total,
-    CP               = CP,
-    
-    #FOR DISPLAY
-    Cd_nose    = Cd_nose_pressure + Cd_nose_friction_ref,
-    Cd_body    = Cd_body_ref,
-    Cd_fins    = Cd_fins_ref,
-    Cd_base    = Cd_base_ref,
-    Cd         = Cd_nose_pressure + Cd_friction_ref + Cd_base_ref,
-    stability_margin = (CP - cg_measured) / bt_diameter
+    Awet_nose = Awet_nose, Awet_body = Awet_body, Awet_fins = Awet_fins,
+    fB = fB, rocket_length = rocket_length,
+    lug_k = lug_k, A_lug = A_lug,
+    cd_scale = 1.0
   )
+  
+  # ---- display-only reference values (M = 0, ref_velocity) ----
+  ref <- aero_coeffs(aero, ref_velocity, 0)
+  Cf_ref     <- skin_friction_cf(ref_velocity, rocket_length, 0)
+  Cf_fin_ref <- skin_friction_cf(ref_velocity, cbar,          0)
+  
+  aero$CNa_total <- ref$CNa
+  aero$CP        <- ref$CP
+  aero$Cd_nose   <- Cd_nose_pressure + Cf_ref * Awet_nose / Aref
+  aero$Cd_body   <- Cf_ref * (1 + 2/fB) * Awet_body / Aref
+  aero$Cd_fins   <- Cf_fin_ref * Awet_fins / Aref
+  aero$Cd_base   <- 0.12
+  aero$Cd_lug    <- lug_k * cd_stag(0) * A_lug / Aref
+  aero$Cd        <- ref$CD0                 # nominal CD0 at 50 m/s, M = 0
+  aero$stability_margin <- (ref$CP - cg_measured) / bt_diameter
+  aero
 }
 
-wc_validate_1 <- 3.0
-wc_validate_2 <- 0.5
-# FIT THESE PARAMATERS USING OR
-weathercock_gain <- function(sm) max(min(sm / wc_validate_1, 1.0) * wc_validate_2, 0)
+# ---- Mach-/velocity-dependent coefficients (called every RK4 stage) ---------
+aero_coeffs <- function(aero, vel, M) {
+  # --- fin normal force, eq. 3.40 (reduces to Barrowman at M = 0) ---
+  beta  <- max(sqrt(abs(1 - M^2)), 1e-3)
+  denom <- 1 + sqrt(1 + (beta * aero$fin_span^2 /
+                           (aero$Afin_one * aero$cosGc))^2)
+  CNa1    <- 2*pi * (aero$fin_span^2 / aero$Aref) / denom
+  CNa_fin <- aero$Kfb * aero$fin_int * (aero$fin_count / 2) * CNa1
+  
+  # --- fin CP marches aft transonically (eqs. 3.35-3.36) ---
+  frac    <- fin_cp_frac(M, aero$A_aspect, aero$cp_coefs)
+  Xcp_fin <- aero$fin_pos + aero$xmac_le + frac * aero$cbar
+  
+  CNa <- aero$CNa_nose + CNa_fin
+  CP  <- (aero$CNa_nose * aero$Xcp_nose + CNa_fin * Xcp_fin) / CNa
+  
+  # --- zero-AoA axial drag, CD0 (eq. 3.97) ---
+  vs      <- max(vel, 0.1)
+  Cd_pres <- aero$Cd_nose_pressure * mach_cd_factor(M)
+  Cf_body <- skin_friction_cf(vs, aero$rocket_length, M)
+  Cf_fin  <- skin_friction_cf(vs, aero$cbar,          M)
+  Cd_fric <- (Cf_body * (aero$Awet_nose + (1 + 2/aero$fB) * aero$Awet_body) +
+                Cf_fin  *  aero$Awet_fins) / aero$Aref     # eq. 3.85
+  Cd_base <- live_base_drag(M)                            # eq. 3.94
+  Cd_lug  <- aero$lug_k * cd_stag(M) * aero$A_lug / aero$Aref  # eq. 3.95
+  
+  # cd_scale is 1 in normal flight; Monte Carlo perturbs it. It multiplies the
+  # WHOLE zero-AoA drag coefficient (including base drag), not just the
+  # wetted-area terms, so the sampled drag uncertainty is the one the user asked for.
+  list(CNa = CNa, CP = CP, Xcp_fin = Xcp_fin,
+       CD0 = (Cd_pres + Cd_fric + Cd_base + Cd_lug) * aero$cd_scale)
+}
+
+# =============================================================================
+# FLIGHT SIMULATION -- RK4, pitch-plane rigid body
+# =============================================================================
+# State vector y (13):
+#   1:3   position   (x, y, z)      world, z up
+#   4:6   velocity   (vx, vy, vz)   world
+#   7:9   body axis unit vector u   world  (points out the nose)
+#  10:12  angular velocity omega    world  (rad/s, perpendicular to u)
+#  13     propellant mass remaining (kg)
+#
+# Sign convention for the normal force, which is what makes weathercocking
+# come out the right way round:
+#   w_hat = unit transverse component of the airflow direction, perpendicular
+#           to the body axis.  The normal force is N * (-w_hat) -- it pushes
+#           toward the side the nose is pointing (air strikes the windward
+#           flank).  Applied at the CP, which lies (CP - CG) AFT of the CG,
+#           this gives torque = N*(CP - CG) * (u x w_hat), which rotates u
+#           TOWARD the relative wind.  A crosswind therefore turns the nose
+#           INTO the wind (upwind weathercock), and a rocket whose CP is
+#           forward of the CG diverges instead of correcting.
+# =============================================================================
+
+rocket_deriv <- function(t, y, ctx) {
+  pos <- y[1:3]; vel <- y[4:6]; u <- y[7:9]; om <- y[10:12]
+  m_prop <- max(y[13], 0)
+  
+  u <- unitv(u)
+  z <- pos[3]
+  
+  m  <- ctx$eff_dry_mass + m_prop
+  Ft <- ctx$thrust(t)
+  
+  # live CG and pitch inertia (uniform rod + parallel axis, Niskanen sec. 4.2.3)
+  cg   <- (ctx$eff_dry_mass * ctx$cg_dry + m_prop * ctx$cg_motor) / m
+  L    <- ctx$aero$rocket_length
+  Ilong <- max(m * L^2 / 12 + m * (cg - L/2)^2, 1e-8)
+  
+  atm   <- isa_atm(z)
+  rho   <- atm$rho
+  a_snd <- atm$a
+  
+  vrel <- vel - ctx$wind
+  vrm_raw <- vnorm(vrel)
+  vrm  <- max(vrm_raw, 1e-6)
+  vhat <- vrel / vrm
+  M    <- vrm / a_snd
+  q    <- 0.5 * rho * vrm^2
+  
+  dom  <- c(0, 0, 0)
+  du   <- c(0, 0, 0)
+  
+  if (vrm_raw < 1e-3) {
+    # No meaningful airflow: the airflow DIRECTION is undefined and the dynamic
+    # pressure is negligible anyway (q < 1e-6 Pa). Coast on gravity + thrust.
+    Faero <- c(0, 0, 0)
+    
+  } else if (ctx$chute_open) {
+    # 3-DOF descent under canopy: all drag from the recovery device
+    Faero <- -Cd_chute * ctx$chute_area * q * vhat
+    Ft    <- 0
+    
+  } else if (ctx$on_rail) {
+    # The rail holds the rocket rigidly along its axis, so there is no angle of
+    # attack and no corrective moment yet. Only the AXIAL component of the
+    # airflow produces force. (Without this, a stationary rocket in a crosswind
+    # would register a spurious 90 deg AoA at t = 0.)
+    v_ax  <- sum(vrel * u)
+    M_ax  <- abs(v_ax) / a_snd
+    co    <- aero_coeffs(ctx$aero, abs(v_ax), M_ax)
+    Faero <- -co$CD0 * 0.5 * rho * v_ax^2 * ctx$aero$Aref * sign(v_ax) * u
+    
+  } else {
+    co  <- aero_coeffs(ctx$aero, vrm, M)
+    
+    cosA  <- max(min(sum(u * vhat), 1), -1)
+    alpha <- acos(cosA)                                  # 0 .. pi
+    
+    # axial force: CD0 scaled for angle of attack (sec. 3.4.7), along the body
+    CA    <- co$CD0 * aoa_drag_factor(alpha)
+    F_ax  <- -CA * q * ctx$aero$Aref * sign(cosA) * u
+    
+    # normal force: perpendicular to the body axis
+    trans <- vhat - cosA * u
+    tn    <- vnorm(trans)
+    if (tn > 1e-9) {
+      what <- trans / tn
+      CN   <- co$CNa * sin(alpha)      # = CNa*alpha for small alpha; saturates
+      F_n  <- -CN * q * ctx$aero$Aref * what
+      torque <- CN * q * ctx$aero$Aref * (co$CP - cg) * cross3(u, what)
+    } else {
+      F_n <- c(0, 0, 0); torque <- c(0, 0, 0)
+    }
+    Faero <- F_ax + F_n
+    
+    # ---- pitch damping (eqs. 3.58-3.60) ----
+    omn <- vnorm(om)
+    if (omn > 1e-6) {
+      l_f <- max(cg, 0); l_a <- max(L - cg, 0)
+      Md_body <- 0.275 * rho * ctx$aero$bt_radius * (l_f^4 + l_a^4) * omn^2
+      xi      <- abs(ctx$aero$Xcp_fin0 - cg)
+      Md_fin  <- 0.3 * rho * min(ctx$aero$fin_count, 4) *
+        ctx$aero$Afin_one * xi^3 * omn^2
+      Md <- Md_body + Md_fin
+      # damping can never reverse the rotation within one step
+      Md <- min(Md, 0.5 * omn * Ilong / max(ctx$dt, 1e-6))
+      torque <- torque - Md * (om / omn)
+    }
+    
+    dom <- torque / Ilong
+    du  <- cross3(om, u)
+  }
+  
+  Fgrav <- c(0, 0, -m * g0)
+  acc   <- (Faero + Fgrav + Ft * u) / m
+  
+  if (ctx$on_rail) {
+    # The rail takes the lateral reaction: only motion along the rail survives,
+    # and the rocket cannot rotate or slide backwards down the rail.
+    a_par <- sum(acc * ctx$lvec)
+    if (a_par < 0 && sum(vel * ctx$lvec) <= 0) a_par <- 0
+    acc <- a_par * ctx$lvec
+    dom <- c(0, 0, 0)
+    du  <- c(0, 0, 0)
+  }
+  
+  dmp <- if (t <= ctx$burn_time && m_prop > 0) -Ft / ctx$v_exhaust else 0
+  
+  c(vel, acc, du, dom, dmp)
+}
 
 flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
                                  casing_mass,
@@ -211,219 +471,208 @@ flight_simulation_3d <- function(thrust_curve, prop_mass, dry_mass,
                          yleft = 0, yright = 0)
   burn_time <- max(thrust_curve$time)
   
-
   eff_dry_mass <- dry_mass + casing_mass
   
-  # v_exhaust <- total_imp / prop_mass
-  total_imp <- integrate(thrust,
-                         min(thrust_curve$time),
+  total_imp <- integrate(thrust, min(thrust_curve$time),
                          max(thrust_curve$time))$value
   v_exhaust <- total_imp / prop_mass
-  if (!is.finite(v_exhaust) || v_exhaust <= 0) {
-    showNotification("Invalid .eng file: check thrust curve", type = "error")
-    return(NULL)
-  }
+  if (!is.finite(v_exhaust) || v_exhaust <= 0) return(NULL)
   
-  bt_area    <- pi * (bt_diameter / 2)^2
   chute_area <- pi * (chute_diameter / 2)^2
   cg_motor   <- nose_length + body_length - motor_length_m / 2
   
+  # Monte Carlo drag perturbation: scales the entire CD0 inside aero_coeffs()
+  aero_s <- aero
+  aero_s$cd_scale <- cd_scale
+  
+  # launch rail direction
   ar <- launch_angle_deg   * pi / 180
   br <- launch_bearing_deg * pi / 180
-  lx <- sin(ar) * sin(br)
-  ly <- sin(ar) * cos(br)
-  lz <- cos(ar)
-  rail_ht <- rail_length_m * cos(ar)
+  lvec <- c(sin(ar) * sin(br), sin(ar) * cos(br), cos(ar))
+  lvec <- unitv(lvec)
   
-  x  <- 0; y  <- 0; z  <- 0
-  vx <- 0; vy <- 0; vz <- 0
-  m      <- eff_dry_mass + prop_mass
-  m_prop <- prop_mass
-  t      <- 0
-  t_apogee   <- NA
+  # ---- initial state: on the rail, aligned with it, no rotation ----
+  y <- c(0, 0, 0,          # position
+         0, 0, 0,          # velocity
+         lvec,             # body axis
+         0, 0, 0,          # angular velocity
+         prop_mass)        # propellant
+  
+  t          <- 0
+  dt         <- precision
+  t_apogee   <- NA_real_
+  t_eject    <- burn_time + chute_delay     # ejection: burnout + motor delay
   chute_open <- FALSE
   on_rail    <- TRUE
+  rail_exit_v <- NA_real_
+  deploy_v    <- NA_real_
+  deploy_alt  <- NA_real_
+  apogee_z    <- 0
   
-  wd_rad <- wind_dir_deg * pi / 180
-  wx <- -wind_speed_ref * sin(wd_rad)
-  wy <- -wind_speed_ref * cos(wd_rad)
+  # ---- wind: Ornstein-Uhlenbeck turbulence about a sheared mean ----
+  wd_rad  <- wind_dir_deg * pi / 180
+  alpha_w <- 1 / max(gust_duration, 1e-3)
+  wind    <- c(-wind_speed_ref * sin(wd_rad), -wind_speed_ref * cos(wd_rad), 0)
   
   max_steps <- ceiling(1200 / max(precision, 0.001))
   if (!landing_only) {
     out <- data.frame(
-      time             = numeric(max_steps),
-      x                = numeric(max_steps),
-      y                = numeric(max_steps),
-      altitude         = numeric(max_steps),
-      velocity         = numeric(max_steps),
-      vx               = numeric(max_steps),
-      vy               = numeric(max_steps),
-      vz               = numeric(max_steps),
-      mach             = numeric(max_steps),
-      stability_margin = numeric(max_steps),
-      phase            = integer(max_steps)   # 1=boost, 2=coast, 3=descent
+      time = numeric(max_steps), x = numeric(max_steps), y = numeric(max_steps),
+      altitude = numeric(max_steps), velocity = numeric(max_steps),
+      vx = numeric(max_steps), vy = numeric(max_steps), vz = numeric(max_steps),
+      mach = numeric(max_steps), aoa = numeric(max_steps),
+      stability_margin = numeric(max_steps), phase = integer(max_steps)
     )
     i <- 1L
   }
   
-  # euler's method
   repeat {
-    dt <- precision
+    z <- y[3]
     
-    atm   <- isa_atm(z)
-    rho   <- atm$rho
-    a_snd <- atm$a
+    # --- wind update, once per step (held constant across the RK4 stages) ---
+    z_ref  <- 10.0
+    shear  <- (max(z, z_ref) / z_ref)^0.14          # 1/7 power law
+    mu     <- c(-wind_speed_ref * shear * sin(wd_rad),
+                -wind_speed_ref * shear * cos(wd_rad), 0)
+    # Stationary sd of an OU process is sigma/sqrt(2*alpha). Scaling the
+    # diffusion by sqrt(2*alpha) makes the realized turbulence intensity equal
+    # the slider value for ANY gust duration (Niskanen eq. 4.7: I_u = sd/U).
+    sigma_u <- 0.01 * wind_turbulence_intensity * wind_speed_ref * shear
+    diff_c  <- sigma_u * sqrt(2 * alpha_w)
+    wind[1] <- wind[1] + alpha_w*(mu[1] - wind[1])*dt + diff_c*sqrt(dt)*rnorm(1)
+    wind[2] <- wind[2] + alpha_w*(mu[2] - wind[2])*dt + diff_c*sqrt(dt)*rnorm(1)
+    wind[3] <- 0
     
-    # 1/7 power law shear
-    z_ref            <- 10.0
-    shear            <- (max(z, z_ref) / z_ref)^0.14
-    mu_x             <- -wind_speed_ref * shear * sin(wd_rad)
-    mu_y             <- -wind_speed_ref * shear * cos(wd_rad)
-    local_wind_speed <- wind_speed_ref * shear
-    sigma_w <- (0.01 * wind_turbulence_intensity) * local_wind_speed
-    alpha <- 1 / gust_duration
-    wx <- wx + alpha * (mu_x - wx) * dt + sigma_w * sqrt(dt) * rnorm(1)
-    wy <- wy + alpha * (mu_y - wy) * dt + sigma_w * sqrt(dt) * rnorm(1)
-    
-    vrx <- vx - wx
-    vry <- vy - wy
-    vrz <- vz #assuming no vertical component of wind
-    vrm <- max(sqrt(vrx^2 + vry^2 + vrz^2), 1e-6)
-    M   <- vrm / a_snd
-    
-    # ── Drag ─────────────────────────────────────────────────────────────────
-    if (chute_open) {
-      # parachute: single Cd over canopy area (Hoerner default 0.80)
-      Cd_eff   <- Cd_chute
-      area_eff <- chute_area
-      
-    } else {
-      # ── Component 1: nose pressure drag ────────────────────────────────────
-      # Pressure phenomenon → scaled by Prandtl-Glauert / transonic ramp
-      Cd_pressure <- aero$Cd_nose_pressure * mach_cd_factor(M)
-      
-      # ── Component 2: skin friction drag ────────────────────────────────────
-      # Recomputed at actual velocity and Mach each timestep.
-      # Own Mach correction (boundary-layer heating) already inside
-      # skin_friction_cf — NOT multiplied by mach_cd_factor.
-      vrm_safe     <- max(vrm, 0.1)
-      Cf_body_live <- skin_friction_cf(vrm_safe, aero$rocket_length, M)
-      Cf_fin_live  <- skin_friction_cf(vrm_safe, aero$c_bar_fin,     M)
-      
-      Cd_friction <- (Cf_body_live * (aero$Awet_nose + (1 + 2/aero$fB) * aero$Awet_body) +
-                        Cf_fin_live  *  aero$Awet_fins) / aero$Aref
-      
-      # ── Component 3: base drag ─────────────────────────────────────────────
-      # Wake behind flat base. Own Mach formula (Hoerner) — not Prandtl-Glauert.
-      Cd_base <- live_base_drag(M)
-      
-      # total drag coefficient; cd_scale = 1 normally, perturbed in Monte Carlo
-      Cd_eff   <- (Cd_pressure + Cd_friction + Cd_base) * cd_scale
-      area_eff <- bt_area
+    # --- events ---
+    s_rail <- sum(y[1:3] * lvec)
+    if (on_rail && s_rail >= rail_length_m) {
+      on_rail <- FALSE
+      rail_exit_v <- vnorm(y[4:6])
+    }
+    if (!chute_open && t >= t_eject) {
+      chute_open <- TRUE
+      deploy_v   <- vnorm(y[4:6])
+      deploy_alt <- z
     }
     
-    q  <- 0.5 * rho * vrm^2
-    Fd <- Cd_eff * area_eff * q
-    Fdx <- -Fd * (vrx / vrm)
-    Fdy <- -Fd * (vry / vrm)
-    Fdz <- -Fd * (vrz / vrm)
+    ctx <- list(aero = aero_s, thrust = thrust, burn_time = burn_time,
+                v_exhaust = v_exhaust, eff_dry_mass = eff_dry_mass,
+                cg_dry = cg_dry_m, cg_motor = cg_motor,
+                chute_area = chute_area, chute_open = chute_open,
+                on_rail = on_rail, lvec = lvec, wind = wind, dt = dt)
     
-    # ── Thrust ────────────────────────────────────────────────────────────────
-    Ft <- thrust(t)
-    
-    # ── Live CG and stability margin ──────────────────────────────────────────
-    cg_live <- (eff_dry_mass * cg_dry_m + m_prop * cg_motor) / m
-    sm_live <- (CP - cg_live) / bt_diameter
-    
-    # ── Weathercocking ────────────────────────────────────────────────────────
-    Fwx <- 0; Fwy <- 0
-    if (on_rail && z >= rail_ht) on_rail <- FALSE
-    if (!on_rail && is.na(t_apogee) && vz > 0.5) {
-      lat_wx  <- wx - vx
-      lat_wy  <- wy - vy
-      lat_wm  <- max(sqrt(lat_wx^2 + lat_wy^2), 1e-6)
-      sin_aoa <- min(lat_wm / vrm, 1.0)
-      wc      <- weathercock_gain(sm_live)
-      Fw      <- wc * CNa_total * q * bt_area * sin_aoa
-      Fwx     <- Fw * (lat_wx / lat_wm)
-      Fwy     <- Fw * (lat_wy / lat_wm)
-    }
-    
-    # ── Equations of motion (Euler) ───────────────────────────────────────────
-    ax <- (Fdx + Fwx + Ft * lx) / m
-    ay <- (Fdy + Fwy + Ft * ly) / m
-    az <- (Ft  * lz  + Fdz - m * g0) / m
-    
-    # store state (full run only)
+    # --- record ---
     if (!landing_only) {
-      out$time[i]             <- t
-      out$x[i]                <- x
-      out$y[i]                <- y
-      out$altitude[i]         <- z
-      out$velocity[i]         <- sqrt(vx^2 + vy^2 + vz^2)
-      out$vx[i]               <- vx
-      out$vy[i]               <- vy
-      out$vz[i]               <- vz
-      out$mach[i]             <- M
-      out$stability_margin[i] <- sm_live
+      vrel  <- y[4:6] - wind
+      vrm   <- max(vnorm(vrel), 1e-6)
+      atm   <- isa_atm(z)
+      uu    <- unitv(y[7:9])
+      cosA  <- max(min(sum(uu * (vrel/vrm)), 1), -1)
+      m_now <- eff_dry_mass + max(y[13], 0)
+      cg_n  <- (eff_dry_mass * cg_dry_m + max(y[13],0) * cg_motor) / m_now
+      Mn    <- vrm / atm$a
+      cp_n  <- aero_coeffs(aero_s, vrm, Mn)$CP
+      
+      out$time[i]     <- t
+      out$x[i]        <- y[1]; out$y[i] <- y[2]; out$altitude[i] <- z
+      out$velocity[i] <- vnorm(y[4:6])
+      out$vx[i]       <- y[4]; out$vy[i] <- y[5]; out$vz[i] <- y[6]
+      out$mach[i]     <- Mn
+      # AoA is undefined while the rail constrains the rocket (at t = 0 the only
+      # relative airflow is the wind, which would read as 90 deg), and it is
+      # equally undefined when the airspeed is ~0 -- which happens at apogee in
+      # dead-still air. Report 0 in both cases; the aero forces there are nil.
+      out$aoa[i]      <- if (on_rail || vrm < 1.0) 0 else acos(cosA) * 180 / pi
+      out$stability_margin[i] <- (cp_n - cg_n) / bt_diameter
       out$phase[i] <- if (t <= burn_time) 1L else if (!chute_open) 2L else 3L
       i <- i + 1L
     }
     
-    # ── State update ──────────────────────────────────────────────────────────
-    # propellant drain: dm/dt = -T/Ve
-    if (t <= burn_time) {
-      m_prop <- max(m_prop - (Ft / v_exhaust) * dt, 0)
-      m      <- eff_dry_mass + m_prop
-    }
-    if (!is.na(t_apogee) && !chute_open && (t - t_apogee) >= chute_delay)
-      chute_open <- TRUE
+    # --- RK4 (eqs. 4.20-4.21) ---
+    k1 <- rocket_deriv(t,        y,                 ctx)
+    k2 <- rocket_deriv(t + dt/2, y + k1 * (dt/2),   ctx)
+    k3 <- rocket_deriv(t + dt/2, y + k2 * (dt/2),   ctx)
+    k4 <- rocket_deriv(t + dt,   y + k3 * dt,       ctx)
+    y  <- y + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+    t  <- t + dt
     
-    vx <- vx + ax * dt;  vy <- vy + ay * dt;  vz <- vz + az * dt
-    x  <- x  + vx * dt;  y  <- y  + vy * dt;  z  <- z  + vz * dt
-    t  <- t  + dt
+    # --- housekeeping: renormalize the body axis, keep omega perpendicular ---
+    y[7:9] <- unitv(y[7:9])
+    y[10:12] <- y[10:12] - sum(y[10:12] * y[7:9]) * y[7:9]
+    y[13] <- max(y[13], 0)
+    if (on_rail && sum(y[4:6] * lvec) < 0) y[4:6] <- c(0, 0, 0)
     
-    if (is.na(t_apogee) && z > 1 && vz < 0) t_apogee <- t
+    if (y[3] > apogee_z) apogee_z <- y[3]
+    if (is.na(t_apogee) && y[3] > 1 && y[6] < 0) t_apogee <- t
     
-    # ── Termination ───────────────────────────────────────────────────────────
-    if (!is.na(t_apogee) && z <= 0) {
+    # --- termination ---
+    if (!is.na(t_apogee) && y[3] <= 0) {
       if (landing_only) {
-        frac <- if (abs(vz * dt) > 1e-9) z / (vz * dt) else 0
-        return(data.frame(x = x - vx * dt * frac,
-                          y = y - vy * dt * frac))
+        # linear interpolation back to the ground plane
+        frac <- if (abs(y[6] * dt) > 1e-9) y[3] / (y[6] * dt) else 0
+        return(data.frame(x = y[1] - y[4] * dt * frac,
+                          y = y[2] - y[5] * dt * frac))
       }
       break
     }
     if (t > 1200 || (!landing_only && i >= max_steps)) break
+    if (!landing_only && any(!is.finite(y))) break
+    if (landing_only  && any(!is.finite(y))) return(data.frame(x = 0, y = 0))
   }
   
-  if (landing_only) return(data.frame(x = x, y = y))
+  if (landing_only) return(data.frame(x = y[1], y = y[2]))
   
-  result   <- out[1:(i - 1), ]
-  rail_row <- which(result$altitude >= rail_ht)
-  attr(result, "rail_exit_ms") <-
-    if (length(rail_row) > 0) result$velocity[rail_row[1]] else NA_real_
+  result <- out[1:(i - 1), ]
+  attr(result, "rail_exit_ms") <- rail_exit_v
+  attr(result, "t_eject")      <- t_eject
+  attr(result, "t_apogee")     <- t_apogee
+  attr(result, "deploy_v")     <- deploy_v
+  attr(result, "deploy_alt")   <- deploy_alt
+  attr(result, "burn_time")    <- burn_time
   result
 }
 
-#parse motor file .eng
+# Rows from liftoff to apogee. Angle of attack is only meaningful as a stability
+# diagnostic during the ascent: EVERY rocket, stable or not, swings through a
+# large angle of attack as it arcs over at apogee, so measuring peak AoA over
+# the whole coast phase would flag every single flight.
+ascent_rows <- function(r) {
+  ta <- attr(r, "t_apogee")
+  if (is.null(ta) || is.na(ta)) r$phase == 1L else r$time <= ta
+}
+ascent_max_aoa <- function(r) {
+  idx <- ascent_rows(r)
+  if (!any(idx)) return(0)
+  max(r$aoa[idx])
+}
+
+# =============================================================================
+# MOTOR FILE PARSING (RASP .eng)
+# =============================================================================
 parse_thrust_input <- function(motor_file, engine_choice) {
   read_eng <- function(lines) {
     lines <- lines[!grepl("^;", lines)]
+    lines <- lines[nzchar(trimws(lines))]
     hdr   <- strsplit(trimws(lines[1]), "\\s+")[[1]]
-    # RASP .eng header: name diam(mm) length(mm) delays prop_mass(kg) total_mass(kg) mfr
-    # Per spec (thrustcurve.org/info/raspformat.html) mass fields are in KILOGRAMS.
-    pm       <- as.numeric(hdr[5])          # propellant mass (kg)
-    total_m  <- as.numeric(hdr[6])          # total motor mass — prop + casing (kg)
-    casing_m <- max(total_m - pm, 0)        # casing: hardware that stays on board after burnout
+    # RASP header: name diam(mm) length(mm) delays prop_mass(kg) total_mass(kg) mfr
+    pm       <- as.numeric(hdr[5])
+    total_m  <- as.numeric(hdr[6])
+    casing_m <- max(total_m - pm, 0)
+    
+    # field 4 is the delay list, e.g. "3-5-7", or "P"/"0" for plugged
+    delays <- suppressWarnings(as.numeric(strsplit(hdr[4], "-")[[1]]))
+    delays <- delays[!is.na(delays) & delays > 0]
+    
     pairs <- lapply(lines[-1], function(l) as.numeric(strsplit(trimws(l), "\\s+")[[1]]))
     pairs <- Filter(function(p) length(p) >= 2 && !anyNA(p), pairs)
     list(
-      thrust_curve   = data.frame(time = sapply(pairs, `[`, 1), thrust = sapply(pairs, `[`, 2)),
+      thrust_curve   = data.frame(time = sapply(pairs, `[`, 1),
+                                  thrust = sapply(pairs, `[`, 2)),
       prop_mass      = pm,
       casing_mass    = casing_m,
-      motor_length_m = as.numeric(hdr[3]) / 1000,   # mm -> m
-      motor_diam_m   = as.numeric(hdr[2]) / 1000    # mm -> m
+      delays         = delays,
+      motor_length_m = as.numeric(hdr[3]) / 1000,
+      motor_diam_m   = as.numeric(hdr[2]) / 1000
     )
   }
   if (!is.null(motor_file)) {
@@ -436,7 +685,99 @@ parse_thrust_input <- function(motor_file, engine_choice) {
   }
 }
 
-# ── CSS ──────────────────────────────────────────────────────────────────────
+# =============================================================================
+# OPENROCKET .ork IMPORT (best effort -- geometry only)
+# .ork is a zip containing rocket.ork, an XML document. All lengths in metres.
+# =============================================================================
+parse_ork <- function(path) {
+  tmp <- file.path(tempdir(), paste0("ork_", as.integer(runif(1, 1, 1e8))))
+  dir.create(tmp, showWarnings = FALSE)
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  
+  files <- tryCatch(utils::unzip(path, exdir = tmp), error = function(e) character(0))
+  xmlf  <- files[grepl("\\.ork$|\\.xml$", files)]
+  doc   <- if (length(xmlf) > 0) {
+    tryCatch(xml2::read_xml(xmlf[1]), error = function(e) NULL)
+  } else {
+    tryCatch(xml2::read_xml(path), error = function(e) NULL)   # uncompressed .ork
+  }
+  if (is.null(doc)) stop("Could not read .ork (not a valid OpenRocket file)")
+  
+  num <- function(node, tag) {
+    if (is.na(node) || length(node) == 0) return(NA_real_)
+    v <- xml2::xml_find_first(node, paste0("./", tag))
+    if (length(v) == 0 || is.na(v)) return(NA_real_)
+    suppressWarnings(as.numeric(xml2::xml_text(v)))
+  }
+  txt <- function(node, tag) {
+    if (is.na(node) || length(node) == 0) return(NA_character_)
+    v <- xml2::xml_find_first(node, paste0("./", tag))
+    if (length(v) == 0 || is.na(v)) return(NA_character_)
+    xml2::xml_text(v)
+  }
+  
+  nose <- xml2::xml_find_first(doc, "//nosecone")
+  tube <- xml2::xml_find_first(doc, "//bodytube")
+  fins <- xml2::xml_find_first(doc, "//trapezoidfinset")
+  
+  shape_raw <- tolower(txt(nose, "shape"))
+  nose_type <- if (is.na(shape_raw)) "ogive"
+  else if (grepl("cone", shape_raw))      "conical"
+  else if (grepl("parab|ellip", shape_raw)) "parabolic"
+  else                                     "ogive"
+  
+  nose_len <- num(nose, "length")
+  aftrad   <- num(nose, "aftradius")
+  body_len <- num(tube, "length")
+  tube_rad <- num(tube, "radius")
+  radius   <- if (!is.na(tube_rad)) tube_rad else aftrad
+  
+  res <- list(
+    nose_type   = nose_type,
+    nose_length = nose_len,
+    body_length = body_len,
+    diameter    = if (!is.na(radius)) 2 * radius else NA_real_,
+    fin_count   = num(fins, "fincount"),
+    fin_root    = num(fins, "rootchord"),
+    fin_tip     = num(fins, "tipchord"),
+    fin_span    = num(fins, "height"),
+    fin_sweep   = num(fins, "sweeplength")
+  )
+  # Fin axial position: OpenRocket stores it relative to the tube; if the
+  # fin set is bottom-referenced, the root LE sits root-chord forward of the aft end.
+  if (!is.na(res$nose_length) && !is.na(res$body_length) && !is.na(res$fin_root)) {
+    res$fin_pos <- res$nose_length + res$body_length - res$fin_root
+  }
+  # Mass / CG overrides if the designer set them
+  om <- xml2::xml_find_first(doc, "//overridemass")
+  oc <- xml2::xml_find_first(doc, "//overridecg")
+  if (length(om) > 0 && !is.na(om))
+    res$dry_mass <- suppressWarnings(as.numeric(xml2::xml_text(om)))
+  if (length(oc) > 0 && !is.na(oc))
+    res$cg_measured <- suppressWarnings(as.numeric(xml2::xml_text(oc)))
+  
+  res[!vapply(res, function(v) length(v) == 0 || all(is.na(v)), logical(1))]
+}
+
+# ---- OpenRocket CSV export (validation overlay) ------------------------------
+parse_or_csv <- function(path) {
+  df <- tryCatch(
+    utils::read.csv(path, comment.char = "#", check.names = FALSE,
+                    stringsAsFactors = FALSE),
+    error = function(e) NULL)
+  if (is.null(df) || ncol(df) < 2) return(NULL)
+  nm  <- tolower(names(df))
+  tcol <- which(grepl("time", nm))[1]
+  acol <- which(grepl("altitude|apogee|height", nm))[1]
+  if (is.na(tcol) || is.na(acol)) return(NULL)
+  out <- data.frame(time = suppressWarnings(as.numeric(df[[tcol]])),
+                    altitude = suppressWarnings(as.numeric(df[[acol]])))
+  out <- out[is.finite(out$time) & is.finite(out$altitude), ]
+  if (nrow(out) == 0) return(NULL)
+  out
+}
+
+# ---- CSS (unchanged) --------------------------------------------------------
 css <- "
 @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700;800&display=swap');
 
@@ -696,10 +1037,9 @@ pre,.shiny-verbatim-output {
 }
 .app-footer a { color:#fc913a88;text-decoration:none; }
 .app-footer a:hover { color:var(--c2); }
-
 "
 
-# ── UI helper: paired numeric + unit selector ────────────────────────────────
+# ---- UI helper: paired numeric + unit selector ------------------------------
 unit_input <- function(input_id, label, default_val, default_unit, choices) {
   div(class="unit-row-wrap",
       tags$label(class="unit-lbl", label),
@@ -711,7 +1051,7 @@ unit_input <- function(input_id, label, default_val, default_unit, choices) {
   )
 }
 
-# ── UI ───────────────────────────────────────────────────────────────────────
+# ---- UI ---------------------------------------------------------------------
 ui <- tagList(
   tags$head(tags$style(HTML(css))),
   navbarPage(
@@ -746,46 +1086,60 @@ ui <- tagList(
                column(6,
                       navset_card_pill(
                         nav_panel("Rocket",
-                                  unit_input("dry_mass_val", "Dry mass",           90,  "g",  unit_choices_mass),
-                                  unit_input("diameter",     "Body tube diameter", 24,  "mm", unit_choices_length),
-                                  unit_input("body_length",  "Body tube length",   300, "mm", unit_choices_length),
-                                  unit_input("cg_measured",  "CG from nose tip (unloaded)",   220, "mm", unit_choices_length)
+                                  unit_input("dry_mass_val", "Dry mass", 90,  "g",  unit_choices_mass),
+                                  unit_input("diameter",     "Body tube diameter",  24,  "mm", unit_choices_length),
+                                  unit_input("body_length",  "Body tube length",    300, "mm", unit_choices_length),
+                                  unit_input("cg_measured",  "CG from nose tip (dry)", 220, "mm", unit_choices_length)
                         ),
                         nav_panel("Nosecone",
                                   selectInput("nose_type","Nosecone type", choices=c("ogive","conical","parabolic")),
                                   unit_input("nose_length","Nosecone length", 70, "mm", unit_choices_length)
                         ),
                         nav_panel("Fins",
-                                  numericInput("fin_count","Number of fins", value=3),
+                                  numericInput("fin_count","Number of fins", value=3, min=1, max=12),
                                   unit_input("fin_root",  "Root chord",      50, "mm", unit_choices_length),
                                   unit_input("fin_tip",   "Tip chord",       25, "mm", unit_choices_length),
-                                  unit_input("fin_span",  "Semi-span (from body wall to fin tip)", 30, "mm", unit_choices_length),
-                                  unit_input("fin_sweep", "Sweep length (leading edge, axial projection)", 20, "mm", unit_choices_length)
+                                  unit_input("fin_span",  "Semi-span", 30, "mm", unit_choices_length),
+                                  unit_input("fin_sweep", "Sweep length", 20, "mm", unit_choices_length),
+                                  unit_input("fin_pos",   "Root leading edge from nose tip", 320, "mm", unit_choices_length)
                         ),
                         nav_panel("Chute",
                                   unit_input("parachute_diameter","Chute diameter", 305, "mm", unit_choices_length)
                         ),
                         nav_panel("Wind",
                                   unit_input("wind_speed_val", "Wind speed at 10m", 3, "m/s", unit_choices_speed),
-                                  p("Match wind speed to a weather station reading. For simulation purposes, wind speed increases with altitude per 1/7 power law."),
-                                  sliderInput("wind_dir","Wind from (° CW from N)", min=0, max=360, value=270),
-                                  sliderInput("wind_turbulence_intensity", "Wind Turbulence Intensity (15% recommended)", 
-                                              min = 10, max = 50, value = 15),
-                                  sliderInput("gust_duration", "Mean gust duration (s)", min = 0.5, max = 10, value = 2, step = 0.5),
+                                  p("Wind increases with altitude per the 1/7 power law."),
+                                  sliderInput("wind_dir","Direction wind is coming from (deg CW from N)", min=0, max=360, value=270),
+                                  sliderInput("wind_turbulence_intensity", "Wind turbulence intensity % (10-20 typical)",
+                                              min = 5, max = 50, value = 15),
+                                  sliderInput("gust_duration", "Mean gust duration (s)", min = 0.5, max = 5, value = 2, step = 0.5),
+                                  p("Turbulence sd is held equal to intensity x wind speed regardless of gust duration.")
                         ),
                         nav_panel("Launch Site",
-                                  unit_input("rail_length",    "Rail length",  0.9, "m",   unit_choices_length),
-                                  
-                                  numericInput("launch_angle","Launch angle from vertical (°)", value=0, min=0, max=30),
-                                  sliderInput("launch_bearing","Launch bearing (° CW from N)", value=0, min=0, max=360)
+                                  unit_input("rail_length", "Rail length", 0.9, "m", unit_choices_length),
+                                  numericInput("launch_angle","Launch angle from vertical (deg)", value=0, min=0, max=30),
+                                  sliderInput("launch_bearing","Launch bearing (deg CW from N)", value=0, min=0, max=360),
+                                  tags$hr(style="border-color:#fc913a33;"),
+                                  unit_input("lug_length", "Launch lug length", 25,  "mm", unit_choices_length),
+                                  unit_input("lug_od",     "Launch lug outer diameter",    4.0, "mm", unit_choices_length),
+                                  unit_input("lug_id",     "Launch lug inner diameter",    3.2, "mm", unit_choices_length)
                         ),
                         nav_panel("Engine",
                                   fileInput("motor_file", NULL, accept=".eng", buttonLabel="Upload .eng"),
-                                  numericInput("parachute_delay","Ejection delay (s)", value=4),
                                   selectInput("engine_choice","Or choose an engine:",
                                               choices=c("Select engine..."="","A8","A10","B4","B6","C6","C11",
                                                         "D12","E12","E16","G40"),
-                                              selected="B6", size=6, selectize=FALSE)
+                                              selected="B6", size=6, selectize=FALSE),
+                                  numericInput("parachute_delay","Ejection Delay (s)", value=4, min=0),
+                                  uiOutput("delay_hint")
+                        ),
+                        nav_panel("Design",
+                                  p("Save the current design, reload it later, or import geometry from an OpenRocket file."),
+                                  downloadButton("save_design", "Save design (.json)", class="btn-default"),
+                                  br(), br(),
+                                  fileInput("load_design", "Load design (.json)", accept=".json"),
+                                  fileInput("ork_file", "Import OpenRocket (.ork)", accept=".ork"),
+                                  p("The .ork import reads geometry only (nose, body, trapezoidal fins). Masses and CG must still be entered or measured.")
                         )
                       ),
                       br(),
@@ -806,14 +1160,16 @@ ui <- tagList(
                       div(class="card", style="padding:16px;",
                           h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:12px;",
                              "Settings"),
-                          sliderInput("precision","Integration interval (s)", value=0.05, min=0.01, max=0.1),
-                          p("0.05 s recommended"),
+                          sliderInput("precision","Integration interval (s)", value=0.02, min=0.005, max=0.1, step=0.005),
+                          p("RK4: 0.02 s recommended."),
                           div(style="margin:10px 0 6px;", tags$label(class="unit-lbl","Display units")),
                           radioButtons("units", label=NULL,
                                        choices=c("Metric"="metric","Imperial (ft)"="imperial"),
                                        selected="metric", inline=FALSE),
                           br(),
-                          actionButton("run","> Simulate", class="btn-primary", style="width:100%;")
+                          actionButton("run","> Simulate", class="btn-primary", style="width:100%;"),
+                          br(), br(),
+                          fileInput("or_csv", "Overlay OpenRocket CSV (SI)", accept=".csv")
                       ),
                       br(),
                       conditionalPanel("output.has_results",
@@ -821,7 +1177,9 @@ ui <- tagList(
                                            h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;margin-bottom:10px;",
                                               "Flight summary"),
                                            verbatimTextOutput("summary")
-                                       )
+                                       ),
+                                       br(),
+                                       uiOutput("safety_box")
                       )
                ),
                column(9,
@@ -829,6 +1187,11 @@ ui <- tagList(
                                        fluidRow(
                                          column(6, plotOutput("altitude_plot", height="260px")),
                                          column(6, plotOutput("velocity_plot", height="260px"))
+                                       ),
+                                       br(),
+                                       fluidRow(
+                                         column(6, plotOutput("aoa_plot", height="220px")),
+                                         column(6, plotOutput("stab_plot", height="220px"))
                                        ),
                                        br(),
                                        plotlyOutput("track_3d", height="420px")
@@ -856,8 +1219,8 @@ ui <- tagList(
              sidebarLayout(
                sidebarPanel(
                  numericInput("mc_runs","Monte Carlo runs", value=200, min=10, max=1000),
-                 p("0.05 s step recommended for speed/accuracy balance."),
-                 sliderInput("chute_delay_std_dev",  "Ejection delay sd (s)",    value=1,  min=0.1, max=5),
+                 p("RK4 costs ~4 force evaluations per step; use 0.05 s here."),
+                 sliderInput("chute_delay_std_dev",  "Ejection delay sd (s)",    value=0.5,min=0.1, max=5, step=0.1),
                  sliderInput("launch_angle_std_dev", "Launch angle sd (deg)",    value=5,  min=0.1, max=10),
                  sliderInput("wind_speed_std_dev",   "Wind speed sd (%)",        value=5,  min=1,   max=99),
                  sliderInput("wind_dir_std_dev",     "Wind direction sd (deg)",  value=30, min=1,   max=180),
@@ -893,42 +1256,32 @@ ui <- tagList(
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Physics"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Most of the aerodynamics are modeled off of and sometimes simplified from 'The Practical Calculation of the Aerodynamic Characteristics of Slender Finned Vehicles' by James Barrowman and the 'OpenRocket technical documentation' by Sampo Nisanken. 
-                       The rocket is split into three main parts: nosecone, body tube, and
-  fins. The drag coefficients for each are calculated separately in alignment with Nisanken."),
+                       "Aerodynamics follow Barrowman (1967) and the OpenRocket technical documentation (Niskanen 2013). The rocket is split into nosecone, body tube and fins, and the drag of each is computed separately."),
                      br(),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       
-                       "Drag is decomposed into four components. Nose pressure drag, which is the drag caused by the nosecone pushing air out of the way during the rocket's flight, uses the half-angle
-  sine-squared formula. This depends primarily on the nosecone type and size.
-  
-  Skin friction drag, the drag caused by air rubbing against all the surfaces on the exterior of the rocket during flight, is computed from the Reynolds-number-based
-  turbulent flat-plate formula (Barrowman eq. 3.78), switching to a roughness-limited
-  value (eq. 3.80) above the critical Reynolds number, with a Mach compressibility
-  correction applied subsonic and supersonic (eqs. 3.82-3.83).
-  
-Base drag, the drag caused by the low pressure zone that forms right below the rocket due to upward motion, uses the Hoerner Mach-dependent formula: 0.12 + 0.13M\u00b2 for M < 1, 0.25/M for M \u2265 1, applied at each dt. 
-
-Parasite drag refers to all drag besides base drag, and we assume that all components of parasite drag scale roughly equally with Mach number."),
+                       "Drag is decomposed into nose pressure drag (half-angle sine-squared), skin friction drag (turbulent flat-plate, eq. 3.78, switching to the roughness-limited value above the critical Reynolds number, eq. 3.80, with subsonic and supersonic compressibility corrections, eqs. 3.82-3.84), base drag (Hoerner, eq. 3.94) and launch-lug parasitic drag (eqs. 3.95-3.96, scaled by the stagnation pressure coefficient of eq. B.2). The zero-angle drag coefficient is scaled with angle of attack, rising to 1.3x at 17 degrees and falling to zero at 90 degrees (sec. 3.4.7)."),
                      br(),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "The atmosphere follows the ISA troposphere model (288.15 K at sea level,
-  -6.5 K/km lapse rate). Wind uses a 1/7-power-law altitude shear profile with an
-  Ornstein-Uhlenbeck turbulence process, and the weathercocking effect is accounted for. Flight is integrated with Euler's method on a user-defined time interval.
-  As the fuel burns, the CG and stability changes at each dt."),
+                       "The rocket is simulated as a rigid body in the pitch plane. The state carries the body axis and the angular velocity, so the normal force acting at the CP produces a real pitching moment about the live CG. Weathercocking, gravity turn, angle-of-attack drag and the divergence of an unstable rocket all emerge from this moment rather than from a tuned gain. Fin normal force uses eq. 3.40 with the Prandtl factor, and the fin CP marches aft above Mach 0.5 (eqs. 3.35-3.36). Pitch damping (eqs. 3.58-3.60) suppresses the wild oscillation that would otherwise follow apogee."),
+                     br(),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "The atmosphere follows the ISA troposphere model. Wind uses a 1/7 power law shear profile with an Ornstein-Uhlenbeck turbulence process whose stationary standard deviation equals the specified turbulence intensity times the local wind speed, independent of the gust duration. Flight is integrated with Runge-Kutta 4 (eqs. 4.20-4.21). Mass, CG, stability margin and all aerodynamic coefficients are recomputed at every stage."),
+                     br(),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Recovery"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "The ejection charge fires at motor burnout plus the motor's delay, exactly as a real motor does, and NOT at apogee. The simulator reports how far from apogee the charge fires and how fast the rocket is moving when the chute opens, and warns when deployment would be fast enough to damage the airframe. Under canopy the drag coefficient is 0.80 over the canopy area (Hoerner)."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Monte Carlo"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Monte Carlo perturbs ejection delay, launch angle, wind speed and direction,
-  dry mass, drag coefficient, and propellant mass by random samples from the Gaussian distributions with user-defined means and SD.
-  with user-specified standard deviations. Each run returns only the landing
-  coordinate to save time and computational complexity. 
-                       Results are plotted on a satellite map (Leaflet package), and users can quickly compute the proportion of simulated flights that landed in a user-defined polygon."),
+                       "Monte Carlo perturbs ejection delay, launch angle, wind speed and direction, dry mass, drag coefficient and propellant mass with Gaussian samples about the nominal values. Each run returns only the landing coordinate. Results are plotted on a satellite map and the proportion landing inside a user-drawn polygon is reported."),
+                     br(),
+                     h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Validation"),
+                     p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
+                       "Designs can be saved and reloaded as JSON, imported from OpenRocket .ork files, and an OpenRocket CSV export can be overlaid on the altitude plot to compare the two simulators directly."),
                      br(),
                      h6(style="color:var(--c3);text-transform:uppercase;letter-spacing:1px;font-size:0.72rem;","Engine data"),
                      p(style="color:var(--text);font-size:0.85rem;line-height:1.8;",
-                       "Motors use the standard RASP .eng format. Built-in curves cover common Estes
-            A–G motors. For anything larger, download the .eng file from ",
+                       "Motors use the standard RASP .eng format; the delay list in the header populates the ejection delay. For anything larger than the built-in Estes curves, download the .eng file from ",
                        tags$a(href="https://www.thrustcurve.org", target="_blank",
                               style="color:var(--c2);", "thrustcurve.org"), "."),
                      br(),
@@ -954,7 +1307,7 @@ Parasite drag refers to all drag besides base drag, and we assume that all compo
                "box-shadow:0 1px 0 rgba(255,255,255,0.08) inset,0 2px 5px rgba(0,0,0,0.4);",
                "display:inline-block;"
              ), "<GitHub>"
-             )
+      )
     ),
     tags$footer(class = "app-footer",
                 span("\u00a9 2026 Tate Commission. All rights reserved."),
@@ -962,11 +1315,10 @@ Parasite drag refers to all drag besides base drag, and we assume that all compo
                   tags$a(href="https://github.com/tatecommission/rrrocket", target="_blank", "GitHub")
                 )
     )
-    
   )
 )
 
-# general plot theme
+# ---- plot theme -------------------------------------------------------------
 theme_plot <- function() {
   theme_minimal(base_size=11) + theme(
     plot.background  = element_rect(fill="#120800", color=NA),
@@ -977,9 +1329,13 @@ theme_plot <- function() {
     axis.text        = element_text(color="#eae374", size=8),
     axis.title       = element_text(color="#fc913a", size=9),
     plot.title       = element_text(color="#f9d62e", size=11, face="bold"),
+    legend.position  = "none",
     plot.margin      = margin(8,12,8,8))
 }
 
+# =============================================================================
+# SERVER
+# =============================================================================
 server <- function(input, output, session) {
   
   use_metric      <- reactiveVal(TRUE)
@@ -995,6 +1351,7 @@ server <- function(input, output, session) {
   outputOptions(output, "has_results", suspendWhenHidden=FALSE)
   outputOptions(output, "has_mc",      suspendWhenHidden=FALSE)
   
+  # ---- SI stores (single source of truth; UI holds display units only) ----
   si <- list(
     dry_mass       = reactiveVal(0.090),
     diameter       = reactiveVal(0.024),
@@ -1005,59 +1362,33 @@ server <- function(input, output, session) {
     fin_tip        = reactiveVal(0.025),
     fin_span       = reactiveVal(0.030),
     fin_sweep      = reactiveVal(0.020),
+    fin_pos        = reactiveVal(0.320),
     parachute_diam = reactiveVal(0.305),
     rail_length    = reactiveVal(0.900),
-    wind_speed     = reactiveVal(3.000)
+    wind_speed     = reactiveVal(3.000),
+    lug_length     = reactiveVal(0.025),
+    lug_od         = reactiveVal(0.0040),
+    lug_id         = reactiveVal(0.0032)
   )
   
-  # Generic observer factories — update SI store and convert display when unit changes
-  make_length_observer <- function(id, store) {
+  make_obs <- function(id, store, to_si, from_si) {
     prev_unit <- reactiveVal(NULL)
     observeEvent(input[[paste0(id,"_unit")]], {
       pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
       if (!is.null(pu) && isTruthy(input[[id]])) {
-        si_val <- to_meters(input[[id]], pu); store(si_val)
-        updateNumericInput(session, id, value=round(from_meters(si_val, nu), 4))
+        si_val <- to_si(input[[id]], pu); store(si_val)
+        updateNumericInput(session, id, value=round(from_si(si_val, nu), 4))
       }
       prev_unit(nu)
     }, ignoreInit=FALSE)
     observeEvent(input[[id]], {
       u <- input[[paste0(id,"_unit")]]
-      if (isTruthy(u) && isTruthy(input[[id]])) store(to_meters(input[[id]], u))
+      if (isTruthy(u) && isTruthy(input[[id]])) store(to_si(input[[id]], u))
     }, ignoreInit=TRUE)
   }
-  
-  make_mass_observer <- function(id, store) {
-    prev_unit <- reactiveVal(NULL)
-    observeEvent(input[[paste0(id,"_unit")]], {
-      pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
-      if (!is.null(pu) && isTruthy(input[[id]])) {
-        si_val <- to_kg(input[[id]], pu); store(si_val)
-        updateNumericInput(session, id, value=round(from_kg(si_val, nu), 4))
-      }
-      prev_unit(nu)
-    }, ignoreInit=FALSE)
-    observeEvent(input[[id]], {
-      u <- input[[paste0(id,"_unit")]]
-      if (isTruthy(u) && isTruthy(input[[id]])) store(to_kg(input[[id]], u))
-    }, ignoreInit=TRUE)
-  }
-  
-  make_speed_observer <- function(id, store) {
-    prev_unit <- reactiveVal(NULL)
-    observeEvent(input[[paste0(id,"_unit")]], {
-      pu <- prev_unit(); nu <- input[[paste0(id,"_unit")]]
-      if (!is.null(pu) && isTruthy(input[[id]])) {
-        si_val <- to_ms(input[[id]], pu); store(si_val)
-        updateNumericInput(session, id, value=round(from_ms(si_val, nu), 4))
-      }
-      prev_unit(nu)
-    }, ignoreInit=FALSE)
-    observeEvent(input[[id]], {
-      u <- input[[paste0(id,"_unit")]]
-      if (isTruthy(u) && isTruthy(input[[id]])) store(to_ms(input[[id]], u))
-    }, ignoreInit=TRUE)
-  }
+  make_length_observer <- function(id, store) make_obs(id, store, to_meters, from_meters)
+  make_mass_observer   <- function(id, store) make_obs(id, store, to_kg,     from_kg)
+  make_speed_observer  <- function(id, store) make_obs(id, store, to_ms,     from_ms)
   
   make_mass_observer(  "dry_mass_val",       si$dry_mass)
   make_length_observer("diameter",           si$diameter)
@@ -1068,9 +1399,27 @@ server <- function(input, output, session) {
   make_length_observer("fin_tip",            si$fin_tip)
   make_length_observer("fin_span",           si$fin_span)
   make_length_observer("fin_sweep",          si$fin_sweep)
+  make_length_observer("fin_pos",            si$fin_pos)
   make_length_observer("parachute_diameter", si$parachute_diam)
   make_length_observer("rail_length",        si$rail_length)
   make_speed_observer( "wind_speed_val",     si$wind_speed)
+  make_length_observer("lug_length",         si$lug_length)
+  make_length_observer("lug_od",             si$lug_od)
+  make_length_observer("lug_id",             si$lug_id)
+  
+  # Write an SI value into a unit_input, respecting whatever unit is displayed
+  set_si_length <- function(id, store, si_val) {
+    if (!is.finite(si_val)) return(invisible(NULL))
+    store(si_val)
+    u <- input[[paste0(id,"_unit")]]; if (!isTruthy(u)) u <- "mm"
+    updateNumericInput(session, id, value = round(from_meters(si_val, u), 4))
+  }
+  set_si_mass <- function(id, store, si_val) {
+    if (!is.finite(si_val)) return(invisible(NULL))
+    store(si_val)
+    u <- input[[paste0(id,"_unit")]]; if (!isTruthy(u)) u <- "g"
+    updateNumericInput(session, id, value = round(from_kg(si_val, u), 4))
+  }
   
   motor_data <- reactive({
     if (!is.null(input$motor_file)) {
@@ -1082,22 +1431,42 @@ server <- function(input, output, session) {
     }
   })
   
+  # ---- motor delay drives the ejection delay input ----
+  observeEvent(motor_data(), {
+    td <- motor_data()
+    if (is.null(td) || length(td$delays) == 0) return()
+    updateNumericInput(session, "parachute_delay", value = td$delays[1])
+  })
+  
+  output$delay_hint <- renderUI({
+    td <- motor_data()
+    if (is.null(td)) return(tags$span(style="color:var(--dim);font-size:0.7rem;",
+                                      "Select an engine to read its delay options."))
+    if (length(td$delays) == 0)
+      return(tags$span(style="color:var(--dim);font-size:0.7rem;",
+                       "This motor is plugged / has no listed delay. Enter your own."))
+    tags$span(style="color:var(--dim);font-size:0.7rem;",
+              sprintf("Delays available on this motor: %s s. The charge fires this long AFTER burnout.",
+                      paste(td$delays, collapse = ", ")))
+  })
+  
   aero_reactive <- reactive({
     if (!all(sapply(list(input$nose_type, input$fin_count), isTruthy))) return(NULL)
     if (!all(sapply(list(si$nose_length(), si$body_length(), si$diameter(),
-                         si$fin_root(), si$fin_tip(), si$fin_span(),
-                         si$fin_sweep(), si$cg_measured()),
+                         si$fin_root(), si$fin_span(), si$cg_measured()),
                     function(x) isTruthy(x) && x > 0))) return(NULL)
+    if (is.null(si$fin_tip()) || si$fin_tip() < 0) return(NULL)
+    if ((si$fin_root() + si$fin_tip()) <= 0) return(NULL)
     tryCatch(
       compute_aero(input$nose_type,
                    si$nose_length(), si$body_length(), si$diameter(), input$fin_count,
                    si$fin_root(), si$fin_tip(), si$fin_span(), si$fin_sweep(),
-                   si$cg_measured()),
+                   si$fin_pos(), si$cg_measured(),
+                   si$lug_length(), si$lug_od(), si$lug_id()),
       error=function(e) NULL)
   })
   
-  #LOADED PHYSICS
-  # loaded stab uses the full motor mass, burnout stab uses casing only
+  # loaded / burnout stability
   aero_loaded <- reactive({
     aero <- aero_reactive(); if (is.null(aero)) return(NULL)
     td   <- motor_data()
@@ -1107,11 +1476,9 @@ server <- function(input, output, session) {
                           cg_loaded                = si$cg_measured())))
     }
     cg_motor     <- si$nose_length() + si$body_length() - td$motor_length_m / 2
-    motor_mass   <- td$prop_mass + td$casing_mass       # total motor mass at ignition
-    # Loaded CG: airframe + full motor
+    motor_mass   <- td$prop_mass + td$casing_mass
     total_loaded <- si$dry_mass() + motor_mass
     cg_loaded    <- (si$dry_mass() * si$cg_measured() + motor_mass * cg_motor) / total_loaded
-    # Burnout CG: airframe + empty casing (propellant gone)
     total_burnout <- si$dry_mass() + td$casing_mass
     cg_burnout    <- if (td$casing_mass > 0)
       (si$dry_mass() * si$cg_measured() + td$casing_mass * cg_motor) / total_burnout
@@ -1125,21 +1492,22 @@ server <- function(input, output, session) {
     ))
   })
   
-  # ── Stability indicator ────────────────────────────────────────────────────
   output$stability_indicator <- renderUI({
     al <- aero_loaded(); if (is.null(al)) return(NULL)
     sm  <- al$stability_margin_loaded
     fmt <- function(m) sprintf("%.1f mm  /  %.2f in", m*1000, m*39.3701)
     cls <- if (sm < 0.5) "stab-red" else if (sm < 1.0) "stab-yellow" else if (sm <= 3.0) "stab-green" else "stab-yellow"
-    lbl <- if (sm < 0.5) "UNSTABLE" else if (sm < 1.0) "MARGINAL" else if (sm <= 3.0) "STABLE" else "OVERSTABLE"
-    hint <- if (sm < 0.5) "Move CG forward or increase fin size." else
+    lbl <- if (sm < 0)   "UNSTABLE - CP AHEAD OF CG"
+    else if (sm < 0.5) "UNSTABLE" else if (sm < 1.0) "MARGINAL"
+    else if (sm <= 3.0) "STABLE"  else "OVERSTABLE"
+    hint <- if (sm < 0.5) "Move CG forward or increase fin size. The simulator will fly this design as it really behaves." else
       if (sm > 3.0) "Risk of weathercocking in wind." else ""
     td <- motor_data()
     motor_lines <- if (!is.null(td)) {
       tagList(
         sprintf("CG loaded (ignition): %s", fmt(al$cg_loaded)), tags$br(),
-        sprintf("Stability Margin when fully loaded:   %.2f cal", al$stability_margin_loaded), tags$br(),
-        sprintf("Stability Margin at engine burnout:  %.2f cal", al$stability_margin_burnout), tags$br(),
+        sprintf("Stability margin fully loaded:  %.2f cal", al$stability_margin_loaded), tags$br(),
+        sprintf("Stability margin at burnout:    %.2f cal", al$stability_margin_burnout), tags$br(),
         tags$span(style="color:var(--dim);font-size:0.72rem;",
                   sprintf("(casing %.0f g, prop %.0f g)",
                           td$casing_mass*1000, td$prop_mass*1000))
@@ -1148,7 +1516,7 @@ server <- function(input, output, session) {
       tags$span(style="color:var(--dim);", "Load an engine to see loaded CG")
     }
     div(class=paste("stab-box", cls),
-        tags$b(sprintf("%s — %.2f cal (loaded)", lbl, sm)), tags$br(),
+        tags$b(sprintf("%s - %.2f cal (loaded)", lbl, sm)), tags$br(),
         sprintf("CP: %s", fmt(al$CP)), tags$br(),
         motor_lines,
         if (nchar(hint) > 0) tagList(tags$br(), tags$span(hint)) else NULL
@@ -1167,7 +1535,7 @@ server <- function(input, output, session) {
     tc2   <- tc
     if (!use_metric()) tc2$thrust <- tc2$thrust * N_to_lbf
     ylab  <- if (use_metric()) "thrust (N)"       else "thrust (lbf)"
-    t_ann <- if (use_metric()) sprintf("Total: %.2f Ns", ti) else sprintf("Total: %.2f lbf·s", ti*N_to_lbf)
+    t_ann <- if (use_metric()) sprintf("Total: %.2f Ns", ti) else sprintf("Total: %.2f lbf.s", ti*N_to_lbf)
     p_ann <- if (use_metric()) sprintf("Peak:  %.2f N",  mt) else sprintf("Peak:  %.2f lbf",   mt*N_to_lbf)
     ggplot(tc2, aes(time, thrust)) +
       geom_area(fill="#1a56db", alpha=0.08) +
@@ -1182,7 +1550,7 @@ server <- function(input, output, session) {
       theme_plot()
   })
   
-  # simulation (single)
+  # ---- single simulation ----
   observeEvent(input$run, {
     aero   <- aero_reactive()
     parsed <- motor_data()
@@ -1202,7 +1570,7 @@ server <- function(input, output, session) {
         wind_turbulence_intensity = input$wind_turbulence_intensity,
         gust_duration = input$gust_duration),
       error=function(e) { showNotification(paste("Sim error:", e$message), type="error"); NULL })
-    if (is.null(sim)) return()
+    if (is.null(sim)) { showNotification("Simulation failed - check the .eng file", type="error"); return() }
     res  <- list(sim=sim, aero=aero,
                  burn_time = max(parsed$thrust_curve$time),
                  label=paste0("Run ", length(run_history())+1),
@@ -1211,7 +1579,7 @@ server <- function(input, output, session) {
     results_store(res)
   })
   
-  # ── Monte Carlo ────────────────────────────────────────────────────────────
+  # ---- Monte Carlo ----
   observeEvent(input$run_mc, {
     aero   <- aero_reactive()
     parsed <- motor_data()
@@ -1225,12 +1593,12 @@ server <- function(input, output, session) {
         sim <- tryCatch(
           flight_simulation_3d(
             parsed$thrust_curve,
-            parsed$prop_mass * rnorm(1, 1, 0.01*input$prop_mass_std_dev),
-            si$dry_mass()    * rnorm(1, 1, 0.01*input$dry_mass_std_dev),
-            parsed$casing_mass,   # casing mass is fixed — no uncertainty here
+            max(parsed$prop_mass * rnorm(1, 1, 0.01*input$prop_mass_std_dev), 1e-6),
+            max(si$dry_mass()    * rnorm(1, 1, 0.01*input$dry_mass_std_dev),  1e-6),
+            parsed$casing_mass,
             si$diameter(), max(si$parachute_diam(), 0.05),
             max(0, rnorm(1, input$parachute_delay, input$chute_delay_std_dev)),
-            aero, aero$CNa_total, aero$CP, 
+            aero, aero$CNa_total, aero$CP,
             input$montecarlo_precision,
             max(0, rnorm(1, si$wind_speed(), 0.01*si$wind_speed()*input$wind_speed_std_dev)),
             rnorm(1, input$wind_dir, input$wind_dir_std_dev),
@@ -1238,11 +1606,10 @@ server <- function(input, output, session) {
             parsed$motor_length_m, si$rail_length(),
             input$launch_bearing,
             max(0, rnorm(1, input$launch_angle, input$launch_angle_std_dev)),
-            cd_scale     = rnorm(1, 1, 0.01 * input$cd_std_dev),
+            cd_scale     = max(rnorm(1, 1, 0.01 * input$cd_std_dev), 0.05),
             landing_only = TRUE,
             wind_turbulence_intensity = input$wind_turbulence_intensity,
-            gust_duration = input$gust_duration
-            ),
+            gust_duration = input$gust_duration),
           error=function(e) NULL)
         landings[[i]] <- if (!is.null(sim)) data.frame(x=sim$x, y=sim$y) else data.frame(x=0, y=0)
       }
@@ -1250,7 +1617,70 @@ server <- function(input, output, session) {
     mc_store(do.call(rbind, landings))
   })
   
-  # ── Outputs ────────────────────────────────────────────────────────────────
+  # ---- design save / load / .ork import ----
+  design_list <- reactive({
+    list(
+      nose_type = input$nose_type, fin_count = input$fin_count,
+      dry_mass = si$dry_mass(), diameter = si$diameter(),
+      body_length = si$body_length(), cg_measured = si$cg_measured(),
+      nose_length = si$nose_length(), fin_root = si$fin_root(),
+      fin_tip = si$fin_tip(), fin_span = si$fin_span(),
+      fin_sweep = si$fin_sweep(), fin_pos = si$fin_pos(),
+      parachute_diam = si$parachute_diam(), rail_length = si$rail_length(),
+      lug_length = si$lug_length(), lug_od = si$lug_od(), lug_id = si$lug_id(),
+      engine_choice = input$engine_choice, parachute_delay = input$parachute_delay,
+      launch_angle = input$launch_angle, launch_bearing = input$launch_bearing,
+      units_note = "all lengths in metres, masses in kilograms"
+    )
+  })
+  
+  output$save_design <- downloadHandler(
+    filename = function() paste0("rrrocket_design_", format(Sys.Date(), "%Y%m%d"), ".json"),
+    content  = function(file) jsonlite::write_json(design_list(), file, auto_unbox = TRUE, pretty = TRUE)
+  )
+  
+  apply_design <- function(d) {
+    if (!is.null(d$nose_type))   updateSelectInput(session, "nose_type", selected = d$nose_type)
+    if (!is.null(d$fin_count))   updateNumericInput(session, "fin_count", value = d$fin_count)
+    if (!is.null(d$dry_mass))    set_si_mass("dry_mass_val", si$dry_mass, d$dry_mass)
+    for (nm in c("diameter","body_length","cg_measured","nose_length","fin_root",
+                 "fin_tip","fin_span","fin_sweep","fin_pos","rail_length",
+                 "lug_length","lug_od","lug_id")) {
+      if (!is.null(d[[nm]])) set_si_length(nm, si[[nm]], as.numeric(d[[nm]]))
+    }
+    if (!is.null(d$parachute_diam))
+      set_si_length("parachute_diameter", si$parachute_diam, as.numeric(d$parachute_diam))
+    if (!is.null(d$engine_choice))   updateSelectInput(session, "engine_choice", selected = d$engine_choice)
+    if (!is.null(d$parachute_delay)) updateNumericInput(session, "parachute_delay", value = d$parachute_delay)
+    if (!is.null(d$launch_angle))    updateNumericInput(session, "launch_angle", value = d$launch_angle)
+    if (!is.null(d$launch_bearing))  updateSliderInput(session, "launch_bearing", value = d$launch_bearing)
+  }
+  
+  observeEvent(input$load_design, {
+    d <- tryCatch(jsonlite::read_json(input$load_design$datapath, simplifyVector = TRUE),
+                  error = function(e) NULL)
+    if (is.null(d)) { showNotification("Could not read that design file", type="error"); return() }
+    apply_design(d)
+    showNotification("Design loaded", type="message")
+  })
+  
+  observeEvent(input$ork_file, {
+    d <- tryCatch(parse_ork(input$ork_file$datapath), error = function(e) NULL)
+    if (is.null(d) || length(d) == 0) {
+      showNotification("Could not read that .ork file (only trapezoidal fin sets are supported)", type="error")
+      return()
+    }
+    apply_design(d)
+    showNotification("OpenRocket geometry imported. Check dry mass and CG - they are not imported reliably.",
+                     type="warning", duration = 10)
+  })
+  
+  or_overlay <- reactive({
+    if (is.null(input$or_csv)) return(NULL)
+    parse_or_csv(input$or_csv$datapath)
+  })
+  
+  # ---- outputs ----
   output$run_history_table <- renderUI({
     hist <- run_history(); if (length(hist) == 0) return(p("No runs yet."))
     sc <- if (use_metric()) 1 else m_to_ft
@@ -1260,11 +1690,13 @@ server <- function(input, output, session) {
       tags$tr(tags$td(r$label), tags$td(r$motor),
               tags$td(sprintf("%.0f %s", max(s$altitude)*sc, u)),
               tags$td(sprintf("%.1f s",  max(s$time))),
-              tags$td(sprintf("%.2f cal", r$aero$stability_margin)))
+              tags$td(sprintf("%.1f deg", ascent_max_aoa(s))),
+              tags$td(sprintf("%.2f cal", min(s$stability_margin))))
     })
     tags$table(class="run-table",
                tags$thead(tags$tr(tags$th("Run"), tags$th("Motor"),
-                                  tags$th("Apogee"), tags$th("Time"), tags$th("Stab."))),
+                                  tags$th("Apogee"), tags$th("Time"),
+                                  tags$th("Max AoA"), tags$th("Min stab."))),
                tags$tbody(rows))
   })
   
@@ -1274,34 +1706,89 @@ server <- function(input, output, session) {
     sc <- if (use_metric()) 1 else m_to_ft
     u  <- if (use_metric()) "m"   else "ft"
     us <- if (use_metric()) "m/s" else "ft/s"
-    cat(sprintf("apogee             %d %s\n",       round(max(r$altitude)*sc), u))
-    cat(sprintf("max velocity       %.1f %s\n",     max(r$velocity)*sc, us))
-    rail_v <- attr(r, "rail_exit_ms")
-    if (!is.null(rail_v) && !is.na(rail_v)) {
-      flag <- if (rail_v*sc < (if (use_metric()) 15 else 49)) " *** LOW" else ""
-      cat(sprintf("rail exit speed    %.1f %s%s\n", rail_v*sc, us, flag))
+    
+    t_ap  <- attr(r, "t_apogee"); t_ej <- attr(r, "t_eject")
+    dv    <- attr(r, "deploy_v"); dalt <- attr(r, "deploy_alt")
+    railv <- attr(r, "rail_exit_ms")
+    
+    cat(sprintf("apogee             %d %s\n",   round(max(r$altitude)*sc), u))
+    cat(sprintf("max velocity       %.1f %s\n", max(r$velocity)*sc, us))
+    if (!is.null(railv) && !is.na(railv)) {
+      flag <- if (railv < V_RAIL_WARN) " *** LOW" else ""
+      cat(sprintf("rail exit speed    %.1f %s%s\n", railv*sc, us, flag))
     }
-    cat(sprintf("max Mach           %.3f\n",         max(r$mach)))
-    cat(sprintf("time to apogee     %.2f s\n",       r$time[which.max(r$altitude)]))
-    cat(sprintf("total flight time  %.2f s\n",       max(r$time)))
-    # r$stability_margin is the live stability margin at each timestep. first value is at ignition (fully loaded),
-    # last powered value ≈ burnout SM. min() gives the worst-case SM across the whole flight.
-    cat(sprintf("SM at ignition     %.2f cal\n",     r$stability_margin[1]))
-    cat(sprintf("SM at burnout      %.2f cal\n",     r$stability_margin[which.min(abs(r$time - max(r$time[r$time <= res$burn_time])))]))
-    cat(sprintf("SM minimum         %.2f cal\n",     min(r$stability_margin)))
-    cat(sprintf("Cd                 %.4f\n",         ae$Cd))
-    cat(sprintf("  nose             %.4f\n",         ae$Cd_nose))
-    cat(sprintf("  body             %.4f\n",         ae$Cd_body))
-    cat(sprintf("  fins             %.4f\n",         ae$Cd_fins))
-    cat(sprintf("  base             %.4f\n",         ae$Cd_base))
+    cat(sprintf("max Mach           %.3f\n", max(r$mach)))
+    cat(sprintf("max AoA (to apogee) %.1f deg\n", ascent_max_aoa(r)))
+    cat(sprintf("time to apogee     %.2f s\n", r$time[which.max(r$altitude)]))
+    cat(sprintf("total flight time  %.2f s\n", max(r$time)))
+    cat("\n")
+    cat(sprintf("burnout            %.2f s\n", attr(r, "burn_time")))
+    cat(sprintf("ejection fires     %.2f s\n", t_ej))
+    if (!is.na(t_ap)) {
+      d <- t_ej - t_ap
+      cat(sprintf("  vs apogee        %.2f s %s\n", abs(d),
+                  if (d < -0.05) "EARLY" else if (d > 0.05) "LATE" else "(on apogee)"))
+    }
+    if (!is.na(dv)) {
+      cat(sprintf("deployment speed   %.1f %s%s\n", dv*sc, us,
+                  if (dv > V_DEPLOY_WARN) " *** HIGH" else ""))
+      cat(sprintf("deployment alt     %d %s\n", round(dalt*sc), u))
+    } else {
+      cat("deployment         *** NEVER FIRED BEFORE IMPACT ***\n")
+    }
+    cat("\n")
+    cat(sprintf("SM at ignition     %.2f cal\n", r$stability_margin[1]))
+    cat(sprintf("SM minimum         %.2f cal\n", min(r$stability_margin)))
+    cat(sprintf("Cd0 nominal        %.4f   (50 m/s, M=0)\n", ae$Cd))
+    cat(sprintf("  nose             %.4f\n", ae$Cd_nose))
+    cat(sprintf("  body             %.4f\n", ae$Cd_body))
+    cat(sprintf("  fins             %.4f\n", ae$Cd_fins))
+    cat(sprintf("  base             %.4f\n", ae$Cd_base))
+    cat(sprintf("  launch lug       %.4f\n", ae$Cd_lug))
+    
+    ov <- or_overlay()
+    if (!is.null(ov)) {
+      cat("\n")
+      cat(sprintf("OpenRocket apogee  %d %s\n", round(max(ov$altitude)*sc), u))
+      cat(sprintf("  difference       %+.1f %%\n",
+                  100 * (max(r$altitude) - max(ov$altitude)) / max(ov$altitude)))
+    }
+  })
+  
+  output$safety_box <- renderUI({
+    res <- results_store(); req(!is.null(res)); r <- res$sim
+    warns <- character(0)
+    railv <- attr(r, "rail_exit_ms")
+    dv    <- attr(r, "deploy_v")
+    t_ap  <- attr(r, "t_apogee"); t_ej <- attr(r, "t_eject")
+    
+    if (is.na(dv))
+      warns <- c(warns, sprintf("Ballistic impact warning. The ejection charge fires at %.1f s, which is after the rocket hits the ground at %.1f s.", t_ej, max(r$time)))
+    if (!is.na(railv) && railv < V_RAIL_WARN)
+      warns <- c(warns, sprintf("Rail exit speed is %.1f m/s. Below ~%d m/s the fins cannot fully stabilize the rocket and prevent weathercocking..", railv, V_RAIL_WARN))
+    if (!is.na(dv) && dv > V_DEPLOY_WARN)
+      warns <- c(warns, sprintf("Chute opens at %.1f m/s. High-speed deployment is potentially dangerous.", dv))
+    if (!is.na(t_ap) && (t_ej - t_ap) < -0.5)
+      warns <- c(warns, sprintf("Ejection fires %.1f s before apogee.", t_ap - t_ej))
+    if (!is.na(t_ap) && (t_ej - t_ap) > 1.5)
+      warns <- c(warns, sprintf("Ejection fires %.1f s after apogee.", t_ej - t_ap))
+    if (min(r$stability_margin) < 1.0)
+      warns <- c(warns, sprintf("Minimum in-flight stability margin %.2f cal. Below 1 cal the rocket is only marginally stable.", min(r$stability_margin)))
+    if (ascent_max_aoa(r) > 30)
+      warns <- c(warns, sprintf("Max angle of attack %.0f deg during the ascent.", ascent_max_aoa(r)))
+    if (ascent_max_aoa(r) > 12 && ascent_max_aoa(r) <= 30)
+      warns <- c(warns, sprintf("Max angle of attack %.0f deg during the ascent.", ascent_max_aoa(r)))
+    
+    if (length(warns) == 0)
+      return(div(class="stab-box stab-green", tags$b("No safety flags on this flight.")))
+    div(class="stab-box stab-red",
+        tags$b("Safety flags"), tags$br(),
+        tagList(lapply(warns, function(w) tagList(tags$span(paste0("- ", w)), tags$br()))))
   })
   
   output$fin_preview <- renderPlot({
-    root  <- si$fin_root()
-    tip   <- si$fin_tip()
-    span  <- si$fin_span()
-    sweep <- si$fin_sweep()
-    diam  <- si$diameter()
+    root  <- si$fin_root(); tip <- si$fin_tip(); span <- si$fin_span()
+    sweep <- si$fin_sweep(); diam <- si$diameter()
     
     req(isTruthy(root) && root > 0,
         isTruthy(tip)  && tip  >= 0,
@@ -1315,17 +1802,12 @@ server <- function(input, output, session) {
     body_r <- diam / 2
     bx     <- -body_r
     
-    # fin vertices: x = outward (span), y = axial (aft = positive)
-    # y=0 is at the nose-side (leading) edge of the root chord
     rx1 <- 0;    ry1 <- 0
     rx2 <- 0;    ry2 <- root
     tx1 <- span; ty1 <- sweep
     tx2 <- span; ty2 <- sweep + tip
     
-    fin_df <- data.frame(
-      x = c(rx1, tx1, tx2, rx2),
-      y = c(ry1, ty1, ty2, ry2)
-    )
+    fin_df <- data.frame(x = c(rx1, tx1, tx2, rx2), y = c(ry1, ty1, ty2, ry2))
     
     pad_x    <- span * 0.55
     pad_y    <- max(root, sweep + tip) * 0.32
@@ -1336,122 +1818,110 @@ server <- function(input, output, session) {
     off_tip  <-  span * 0.05
     off_span <-  max(root, sweep + tip) * 0.18
     
-    ann_col  <- "#fff8f0"
-    fin_fill <- "#eae37433"
-    fin_col  <- "#f9d62e"
-    body_col <- "#3a2510"
-    dim_col  <- "#1a56db"
-    txt_col  <- "#fff8f0"
+    ann_col  <- "#fff8f0"; fin_fill <- "#eae37433"; fin_col <- "#f9d62e"
+    body_col <- "#3a2510"; dim_col  <- "#1a56db";   txt_col <- "#fff8f0"
     
-    p <- ggplot() +
-      
-      # body tube rect
-      annotate("rect",
-               xmin = bx, xmax = 0,
+    ggplot() +
+      annotate("rect", xmin = bx, xmax = 0,
                ymin = -pad_y * 0.6, ymax = max(root, sweep + tip) + pad_y * 0.6,
                fill = body_col, color = "#eae374aa", linewidth = 0.6) +
-      
-      # fin polygon
       geom_polygon(data = fin_df, aes(x = x, y = y),
                    fill = fin_fill, color = fin_col, linewidth = 1.2) +
-      
-      # ROOT CHORD — double-headed arrow left of body wall
-      annotate("segment",
-               x = off_root, xend = off_root, y = ry1, yend = ry2,
+      annotate("segment", x = off_root, xend = off_root, y = ry1, yend = ry2,
                color = dim_col, linewidth = 0.7,
                arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
       annotate("segment", x = off_root - span*0.03, xend = off_root + span*0.01,
                y = ry1, yend = ry1, color = dim_col, linewidth = 0.5) +
       annotate("segment", x = off_root - span*0.03, xend = off_root + span*0.01,
                y = ry2, yend = ry2, color = dim_col, linewidth = 0.5) +
-      annotate("text",
-               x = off_root - span * 0.06, y = (ry1 + ry2) / 2,
+      annotate("text", x = off_root - span * 0.06, y = (ry1 + ry2) / 2,
                label = paste0("root\n", fmt(root)),
                color = txt_col, size = 3.1, hjust = 1, fontface = "bold") +
-      
-      # TIP CHORD — right of fin tip
-      annotate("segment",
-               x = span + off_tip, xend = span + off_tip, y = ty1, yend = ty2,
+      annotate("segment", x = span + off_tip, xend = span + off_tip, y = ty1, yend = ty2,
                color = dim_col, linewidth = 0.7,
                arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
       annotate("segment", x = span + off_tip - span*0.01, xend = span + off_tip + span*0.04,
                y = ty1, yend = ty1, color = dim_col, linewidth = 0.5) +
       annotate("segment", x = span + off_tip - span*0.01, xend = span + off_tip + span*0.04,
                y = ty2, yend = ty2, color = dim_col, linewidth = 0.5) +
-      annotate("text",
-               x = span + off_tip + span * 0.06, y = (ty1 + ty2) / 2,
+      annotate("text", x = span + off_tip + span * 0.06, y = (ty1 + ty2) / 2,
                label = paste0("tip\n", fmt(tip)),
                color = txt_col, size = 3.1, hjust = 0, fontface = "bold") +
-      
-      # SEMI-SPAN — horizontal arrow below fin
-      annotate("segment",
-               x = 0, xend = span, y = -off_span, yend = -off_span,
+      annotate("segment", x = 0, xend = span, y = -off_span, yend = -off_span,
                color = dim_col, linewidth = 0.7,
                arrow = arrow(ends = "both", length = unit(5, "pt"), type = "closed")) +
-      annotate("segment", x = 0,    xend = 0,
-               y = -off_span*0.6, yend = -off_span*0.6, color = dim_col, linewidth = 0.5) +
-      annotate("segment", x = span, xend = span,
-               y = -off_span*0.6, yend = -off_span*0.6, color = dim_col, linewidth = 0.5) +
-      annotate("text",
-               x = span / 2, y = -off_span - 0.0024,
+      annotate("text", x = span / 2, y = -off_span - 0.0024,
                label = paste0("semi-span  ", fmt(span)),
                color = txt_col, size = 3.1, hjust = 0.5, fontface = "bold") +
-      
-      # SWEEP — only if sweep > 0 (guard against zero-sweep fins)
       { if (sweep > 1e-5) list(
-        annotate("segment",
-                 x = span + off_tip, xend = span + off_tip, y = ry1, yend = ty1,
+        annotate("segment", x = span + off_tip, xend = span + off_tip, y = ry1, yend = ty1,
                  color = dim_col, linewidth = 0.6,
                  arrow = arrow(ends = "both", length = unit(4, "pt"), type = "closed")),
-        annotate("segment",
-                 x = rx1, xend = tx1, y = ty1, yend = ty1,
+        annotate("segment", x = rx1, xend = tx1, y = ty1, yend = ty1,
                  color = dim_col, linewidth = 0.4, linetype = "dotted"),
-        annotate("segment",
-                 x = tx1, xend = tx1, y = ry1, yend = ty1,
+        annotate("segment", x = tx1, xend = tx1, y = ry1, yend = ty1,
                  color = dim_col, linewidth = 0.4, linetype = "dotted"),
-        annotate("text",
-                 x = span * 1.13, y = sweep * 0.3,
+        annotate("text", x = span * 1.13, y = sweep * 0.3,
                  label = paste0("sweep\n", fmt(sweep)),
                  color = ann_col, size = 2.9, hjust = 0, fontface = "bold")
       ) else list() } +
-      
-      # BODY WALL label
-      annotate("text",
-               x = bx / 2, y = max(root, sweep + tip) + pad_y * 0.7,
-               label = "body wall",
-               color = "#eae374aa", size = 2.6, hjust = 0.5) +
-      
+      annotate("text", x = bx / 2, y = max(root, sweep + tip) + pad_y * 0.7,
+               label = "body wall", color = "#eae374aa", size = 2.6, hjust = 0.5) +
       scale_x_continuous(expand = expansion(0)) +
       scale_y_continuous(expand = expansion(0)) +
       coord_fixed(xlim = xlim, ylim = ylim) +
       labs(title = "Fin preview", x = NULL, y = NULL) +
       theme_plot() +
-      theme(axis.text  = element_blank(),
-            axis.ticks = element_blank(),
+      theme(axis.text = element_blank(), axis.ticks = element_blank(),
             panel.grid = element_blank())
-    
-    p
   }, bg = "#120800")
   
   output$altitude_plot <- renderPlot({
     res <- results_store(); req(!is.null(res)); r <- res$sim
-    alt  <- if (use_metric()) r$altitude else r$altitude * m_to_ft
+    sc   <- if (use_metric()) 1 else m_to_ft
     ylab <- if (use_metric()) "altitude (m)" else "altitude (ft)"
-    ggplot(data.frame(t=r$time, alt=alt), aes(t, alt)) +
+    p <- ggplot(data.frame(t=r$time, alt=r$altitude*sc), aes(t, alt)) +
       geom_area(fill="#1a56db", alpha=0.15) +
       geom_line(color="#1a56db", linewidth=1) +
-      geom_hline(yintercept=0, color="#e8eaf0") +
-      labs(x="time (s)", y=ylab, title="Altitude") + theme_plot()
+      geom_hline(yintercept=0, color="#e8eaf0")
+    ov <- or_overlay()
+    if (!is.null(ov)) {
+      p <- p + geom_line(data = data.frame(t = ov$time, alt = ov$altitude*sc),
+                         aes(t, alt), color="#ff4e50", linewidth=0.8, linetype="dashed")
+    }
+    ttl <- if (is.null(ov)) "Altitude" else "Altitude (dashed red = OpenRocket)"
+    p + labs(x="time (s)", y=ylab, title=ttl) + theme_plot()
   })
   
   output$velocity_plot <- renderPlot({
     res <- results_store(); req(!is.null(res)); r <- res$sim
-    vz   <- if (use_metric()) r$vz else r$vz * m_to_ft
+    sc   <- if (use_metric()) 1 else m_to_ft
     ylab <- if (use_metric()) "vertical velocity (m/s)" else "vertical velocity (ft/s)"
-    ggplot(data.frame(t=r$time, vz=vz), aes(t, vz)) +
+    ggplot(data.frame(t=r$time, vz=r$vz*sc), aes(t, vz)) +
       geom_line(color="#f9d62e", linewidth=1) +
       geom_hline(yintercept=0, color="#fc913a44", linetype="dashed") +
       labs(x="time (s)", y=ylab, title="Vertical velocity") + theme_plot()
+  })
+  
+  output$aoa_plot <- renderPlot({
+    res <- results_store(); req(!is.null(res)); r <- res$sim
+    d <- r[ascent_rows(r), ]
+    ggplot(d, aes(time, aoa)) +
+      geom_line(color="#ff4e50", linewidth=1) +
+      geom_hline(yintercept=17, color="#fc913a66", linetype="dashed") +
+      labs(x="time (s)", y="angle of attack (deg)",
+           title="Angle of attack (liftoff to apogee)") + theme_plot()
+  })
+  
+  output$stab_plot <- renderPlot({
+    res <- results_store(); req(!is.null(res)); r <- res$sim
+    d <- r[ascent_rows(r), ]
+    ggplot(d, aes(time, stability_margin)) +
+      geom_line(color="#e2f4c7", linewidth=1) +
+      geom_hline(yintercept=1, color="#22c55e88", linetype="dashed") +
+      geom_hline(yintercept=0, color="#ef444488") +
+      labs(x="time (s)", y="stability margin (cal)",
+           title="Live stability margin") + theme_plot()
   })
   
   output$track_3d <- renderPlotly({
@@ -1464,113 +1934,68 @@ server <- function(input, output, session) {
     phase_colors <- c("1" = "#ff4e50", "2" = "#f9d62e", "3" = "#e2f4c7")
     phase_names  <- c("1" = "Boost",   "2" = "Coast",   "3" = "Descent")
     
-    # Split into contiguous phase segments so lines don't cross-color
-    # Add a segment ID that increments whenever phase changes
     r$segment <- cumsum(c(1, diff(r$phase) != 0))
     
     traces <- lapply(unique(r$segment), function(seg) {
-      d     <- r[r$segment == seg, ]
-      ph    <- as.character(d$phase[1])
-      # extend one row into next segment to avoid gaps between traces
+      d  <- r[r$segment == seg, ]
+      ph <- as.character(d$phase[1])
       next_row <- r[r$segment == seg + 1, ]
       if (nrow(next_row) > 0) d <- rbind(d, next_row[1, ])
-      list(
-        x    = d$x * sc,
-        y    = d$y * sc,
-        z    = d$altitude * sc,
-        col  = phase_colors[ph],
-        name = phase_names[ph],
-        ph   = ph
-      )
+      list(x = d$x * sc, y = d$y * sc, z = d$altitude * sc,
+           col = phase_colors[ph], name = phase_names[ph], ph = ph)
     })
     
-    # Build plot with first trace, then add remaining
     fig <- plot_ly(type = "scatter3d", mode = "lines")
-    
     seen_phases <- character(0)
     for (tr in traces) {
       show_legend <- !(tr$ph %in% seen_phases)
       seen_phases <- union(seen_phases, tr$ph)
       fig <- fig |> add_trace(
         x = tr$x, y = tr$y, z = tr$z,
-        type      = "scatter3d",
-        mode      = "lines",
-        name      = tr$name,
-        showlegend = show_legend,
-        line      = list(color = tr$col, width = 4)
-      )
+        type = "scatter3d", mode = "lines",
+        name = tr$name, showlegend = show_legend,
+        line = list(color = tr$col, width = 4))
     }
     
-    # invisible anchor point — only the floor projection shows
     fig <- fig |>
       add_trace(
         x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
-        type = "scatter3d", mode = "markers",
-        name = "Landing",
+        type = "scatter3d", mode = "markers", name = "Landing",
         marker = list(color = "#e02424", size = 7, symbol = "circle", opacity = 0),
-        projection = list(
-          z = list(show = TRUE, opacity = 1, scale = 1)
-        ),
-        showlegend = TRUE
-      ) |>
-      # outer white ring
+        projection = list(z = list(show = TRUE, opacity = 1, scale = 1)),
+        showlegend = TRUE) |>
       add_trace(
         x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
-        type = "scatter3d", mode = "markers",
-        name = "Landing",
-        marker = list(
-          color   = "rgba(0,0,0,0)",
-          size    = 14,
-          symbol  = "circle-open",
-          opacity = 0,
-          line    = list(color = "#ffffff", width = 2)
-        ),
-        projection = list(
-          z = list(show = TRUE, opacity = 1, scale = 1)
-        ),
-        showlegend = FALSE
-      ) |>
-      # inner red filled dot
+        type = "scatter3d", mode = "markers", name = "Landing",
+        marker = list(color = "rgba(0,0,0,0)", size = 14, symbol = "circle-open",
+                      opacity = 0, line = list(color = "#ffffff", width = 2)),
+        projection = list(z = list(show = TRUE, opacity = 1, scale = 1)),
+        showlegend = FALSE) |>
       add_trace(
         x = tail(r$x, 1) * sc, y = tail(r$y, 1) * sc, z = 0,
-        type = "scatter3d", mode = "markers",
-        name = "Landing",
-        marker = list(
-          color   = "rgba(0,0,0,0)",
-          size    = 5,
-          symbol  = "circle",
-          opacity = 0,
-          line    = list(color = "#e02424", width = 0)
-        ),
-        projection = list(
-          z = list(show = TRUE, opacity = 1, scale = 1)
-        ),
-        showlegend = FALSE
-      ) |> 
+        type = "scatter3d", mode = "markers", name = "Landing",
+        marker = list(color = "rgba(0,0,0,0)", size = 5, symbol = "circle",
+                      opacity = 0, line = list(color = "#e02424", width = 0)),
+        projection = list(z = list(show = TRUE, opacity = 1, scale = 1)),
+        showlegend = FALSE) |>
       layout(
         paper_bgcolor = "#120800",
         font  = list(color = "#f9d62e", family = "Lexend, sans-serif"),
-        legend = list(
-          bgcolor     = "rgba(26,16,8,0.85)",
-          bordercolor = "#fc913a44",
-          borderwidth = 1,
-          font        = list(color = "#eae374", size = 11)
-        ),
+        legend = list(bgcolor = "rgba(26,16,8,0.85)", bordercolor = "#fc913a44",
+                      borderwidth = 1, font = list(color = "#eae374", size = 11)),
         scene = list(
           bgcolor = "#1a0a02",
-          xaxis   = list(title = xl, gridcolor = "#3a2010", color = "#eae374"),
-          yaxis   = list(title = yl, gridcolor = "#3a2010", color = "#eae374"),
-          zaxis   = list(title = zl, gridcolor = "#3a2010", color = "#eae374")
-        )
-      )
-    
+          xaxis = list(title = xl, gridcolor = "#3a2010", color = "#eae374"),
+          yaxis = list(title = yl, gridcolor = "#3a2010", color = "#eae374"),
+          zaxis = list(title = zl, gridcolor = "#3a2010", color = "#eae374")))
     fig
   })
   
+  # ---- map / Monte Carlo landing zone ----
   launch_point  <- reactiveVal(list(lat=38.89, lng=-77.03))
   drawn_polygon <- reactiveVal(NULL)
   
-  observeEvent(input$map_click,         { launch_point(list(lat=input$map_click$lat, lng=input$map_click$lng)) })
+  observeEvent(input$map_click,            { launch_point(list(lat=input$map_click$lat, lng=input$map_click$lng)) })
   observeEvent(input$map_draw_new_feature, { drawn_polygon(input$map_draw_new_feature) })
   
   rocket_icon <- makeIcon(
@@ -1592,6 +2017,16 @@ server <- function(input, output, session) {
       addMarkers(lng=lp$lng, lat=lp$lat, icon=rocket_icon, label="Launch pad", group="launch")
   })
   
+  output$landing_pct <- renderPrint({
+    p <- landing_pct_val(); req(!is.null(p))
+    lc <- mc_store()
+    cat(sprintf("%.1f%% of %d simulated flights land inside the polygon\n", p, nrow(lc)))
+    cat(sprintf("mean landing distance from pad: %.0f m\n",
+                mean(sqrt(lc$x^2 + lc$y^2))))
+    cat(sprintf("95th percentile distance:       %.0f m\n",
+                quantile(sqrt(lc$x^2 + lc$y^2), 0.95)))
+  })
+  
   observeEvent(list(mc_store(), drawn_polygon()), {
     lc <- mc_store(); poly <- drawn_polygon()
     if (is.null(lc) || is.null(poly)) return()
@@ -1602,7 +2037,6 @@ server <- function(input, output, session) {
     poly_mat    <- do.call(rbind, lapply(poly_coords, function(p) c(p[[1]], p[[2]])))
     if (!identical(poly_mat[1,], poly_mat[nrow(poly_mat),]))
       poly_mat <- rbind(poly_mat, poly_mat[1,])
-    # point in polygon <- pip
     pip <- function(px, py, pm) sapply(seq_along(px), function(k) {
       x<-px[k]; y<-py[k]; n<-nrow(pm); j<-n; inside<-FALSE
       for (i in 1:n) {
